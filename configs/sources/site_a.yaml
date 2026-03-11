@@ -1,0 +1,27 @@
+# Demo source used for smoke tests and local validation of the ETL pipeline.
+name: site_a
+enabled: true
+base_url: https://example.com/site-a
+scraper: dummy_site_a
+fetcher: http
+timeout_seconds: 10
+# Sample products let the dummy scraper run without network access.
+sample_products:
+  - external_id: SKU-1001
+    product_name: Demo Running Shoes
+    brand: ExampleBrand
+    category: Footwear
+    product_url: https://example.com/site-a/products/sku-1001
+    currency: USD
+    listed_price: "129.99"
+    sale_price: "109.99"
+    availability: in_stock
+  - external_id: SKU-1002
+    product_name: Demo Training Jacket
+    brand: ExampleBrand
+    category: Apparel
+    product_url: https://example.com/site-a/products/sku-1002
+    currency: USD
+    listed_price: "89.99"
+    sale_price:
+    availability: out_of_stock

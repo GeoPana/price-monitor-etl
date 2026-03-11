@@ -1,0 +1,21 @@
+# Local development services for the project.
+services:
+  db:
+    # Official Postgres image is sufficient; no custom Dockerfile is required yet.
+    image: postgres:16
+    container_name: price-monitor-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: price_monitor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      # Bind to 5433 on the host to avoid conflicts with a local PostgreSQL on 5432.
+      - "5433:5432"
+    volumes:
+      # Persist database state across container restarts.
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  # Named volume managed by Docker for Postgres data files.
+  postgres_data:

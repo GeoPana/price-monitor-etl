@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+"""Validation schemas shared across scraping and persistence layers."""
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+ScrapeRunStatus = Literal["running", "succeeded", "failed"]
+
+
+class ProductRecord(BaseModel):
+    """Validated product data emitted by scrapers before persistence."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    external_id: str
+    product_name: str
+    brand: str | None = None
+    category: str | None = None
+    product_url: str
+    currency: str = Field(min_length=3, max_length=3)
+    listed_price: Decimal
+    sale_price: Decimal | None = None
+    availability: str = "unknown"
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("listed_price", "sale_price")
+    @classmethod
+    def validate_price(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("Price cannot be negative.")
+        return value
+
+
+class ScrapeRunCreate(BaseModel):
+    """Payload for creating a new scrape run record."""
+
+    source_name: str
+    status: ScrapeRunStatus = "running"
+    started_at: datetime
+
+
+class ScrapeRunUpdate(BaseModel):
+    """Payload for updating scrape run status after execution."""
+
+    status: ScrapeRunStatus
+    finished_at: datetime
+    records_fetched: int = 0
+    records_inserted: int = 0
+    error_message: str | None = None
+
+
+class ProductSnapshotCreate(ProductRecord):
+    """Persistable product snapshot enriched with scrape metadata."""
+
+    source_name: str
+    scrape_run_id: int
+    scraped_at: datetime

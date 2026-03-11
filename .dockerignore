@@ -1,0 +1,38 @@
+# Python cache and compiled artifacts do not belong in Docker build context.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local virtual environments are machine-specific and large.
+.venv/
+venv/
+env/
+
+# Git metadata is not needed to build the image.
+.git/
+.gitignore
+
+# Test and coverage artifacts are development-only outputs.
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Keep secrets and runtime-generated data out of the build context.
+.env
+logs/
+data/
+docs/screenshots/
+
+# Packaging artifacts should be rebuilt inside the image if needed.
+build/
+dist/
+*.egg-info/
+
+# Editor and OS-specific files add noise and no build value.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

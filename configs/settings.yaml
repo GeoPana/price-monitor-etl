@@ -1,0 +1,19 @@
+# Base application settings. Environment variables may override selected values.
+app:
+  name: Price Monitor ETL
+  environment: development
+
+database:
+  # Use 5433 to avoid collisions with a local PostgreSQL service on 5432.
+  url: postgresql+psycopg://postgres:postgres@localhost:5433/price_monitor
+
+logging:
+  level: INFO
+  file: logs/pricemonitor.log
+
+directories:
+  # These directories are reserved for later raw/processed/export ETL stages.
+  raw: data/raw
+  processed: data/processed
+  exports: data/exports
+  logs: logs
