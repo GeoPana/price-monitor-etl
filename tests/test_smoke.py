@@ -25,13 +25,13 @@ LISTING_HTML = dedent(
               </a>
             </div>
             <h3>
-              <a href="catalogue/test-book-one_1/index.html" title="Test Book One">
+              <a href="catalogue/test-book-one_1/index.html" title="  Test   Book One  ">
                 Test Book One
               </a>
             </h3>
             <div class="product_price">
-              <p class="price_color">£10.00</p>
-              <p class="instock availability">In stock</p>
+              <p class="price_color"> Â£10.00 </p>
+              <p class="instock availability"> In stock </p>
             </div>
           </article>
 
@@ -42,13 +42,12 @@ LISTING_HTML = dedent(
               </a>
             </div>
             <h3>
-              <a href="catalogue/test-book-two_2/index.html" title="Test Book Two">
-                Test Book Two
+              <a href="catalogue/test-book-two_2/index.html" title="   ">
               </a>
             </h3>
             <div class="product_price">
-              <p class="price_color">£22.50</p>
-              <p class="instock availability">Out of stock</p>
+              <p class="price_color"> Â£-22.50 </p>
+              <p class="instock availability"> Out of stock </p>
             </div>
           </article>
         </section>
@@ -69,16 +68,16 @@ DETAIL_ONE_HTML = dedent(
           <li class="active">Test Book One</li>
         </ul>
         <div class="product_main">
-          <h1>Test Book One</h1>
-          <p class="price_color">£10.00</p>
-          <p class="instock availability">In stock (20 available)</p>
+          <h1>  Test Book One  </h1>
+          <p class="price_color"> Â£10.00 </p>
+          <p class="instock availability"> In stock (20 available) </p>
         </div>
         <div class="item active">
           <img src="../../media/cache/test-book-one-large.jpg" alt="Test Book One">
         </div>
         <table class="table table-striped">
           <tr><th>UPC</th><td>UPC-BOOK-1</td></tr>
-          <tr><th>Price (incl. tax)</th><td>£10.00</td></tr>
+          <tr><th>Price (incl. tax)</th><td>Â£10.00</td></tr>
           <tr><th>Availability</th><td>In stock (20 available)</td></tr>
         </table>
       </body>
@@ -94,19 +93,19 @@ DETAIL_TWO_HTML = dedent(
           <li><a href="/">Home</a></li>
           <li><a href="/catalogue/category/books_1/index.html">Books</a></li>
           <li><a href="/catalogue/category/books/poetry_23/index.html">Poetry</a></li>
-          <li class="active">Test Book Two</li>
+          <li class="active"></li>
         </ul>
         <div class="product_main">
-          <h1>Test Book Two</h1>
-          <p class="price_color">£22.50</p>
-          <p class="instock availability">Out of stock</p>
+          <h1>   </h1>
+          <p class="price_color"> Â£-22.50 </p>
+          <p class="instock availability"> Out of stock </p>
         </div>
         <div class="item active">
           <img src="../../media/cache/test-book-two-large.jpg" alt="Test Book Two">
         </div>
         <table class="table table-striped">
           <tr><th>UPC</th><td>UPC-BOOK-2</td></tr>
-          <tr><th>Price (incl. tax)</th><td>£22.50</td></tr>
+          <tr><th>Price (incl. tax)</th><td>Â£-22.50</td></tr>
           <tr><th>Availability</th><td>Out of stock</td></tr>
         </table>
       </body>
@@ -184,7 +183,7 @@ def stub_site_a_fetcher(monkeypatch) -> None:
     monkeypatch.setattr(HttpFetcher, "fetch", fake_fetch)
 
 
-def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch) -> None:
+def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
     """Verify schema creation and a single real-scraper flow end to end."""
 
     config_path = write_test_config(tmp_path)
@@ -193,13 +192,28 @@ def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch) -> None:
 
     assert main(["--config", str(config_path), "init-db"]) == 0
     assert db_path.exists()
+    capsys.readouterr()
 
     assert main(["--config", str(config_path), "scrape", "--source", "site_a"]) == 0
+    scrape_output = capsys.readouterr().out
+
+    assert "fetched=2 valid=1 invalid=1 inserted=1" in scrape_output
 
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     with engine.connect() as connection:
         scrape_runs_count = connection.execute(text("SELECT COUNT(*) FROM scrape_runs")).scalar_one()
         snapshots_count = connection.execute(text("SELECT COUNT(*) FROM product_snapshots")).scalar_one()
+        latest_run = connection.execute(
+            text(
+                """
+                SELECT records_fetched, records_inserted
+                FROM scrape_runs
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+        
         snapshots = connection.execute(
             text(
                 """
@@ -211,16 +225,15 @@ def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch) -> None:
         ).mappings().all()
 
     assert scrape_runs_count == 1
-    assert snapshots_count == 2
+    assert snapshots_count == 1
+
+    assert latest_run["records_fetched"] == 2
+    assert latest_run["records_inserted"] == 1
 
     assert snapshots[0]["external_id"] == "UPC-BOOK-1"
     assert snapshots[0]["product_name"] == "Test Book One"
     assert snapshots[0]["category"] == "Travel"
     assert snapshots[0]["availability"] == "in_stock"
-
-    assert snapshots[1]["external_id"] == "UPC-BOOK-2"
-    assert snapshots[1]["category"] == "Poetry"
-    assert snapshots[1]["availability"] == "out_of_stock"
 
     first_payload = snapshots[0]["payload"]
     if isinstance(first_payload, str):

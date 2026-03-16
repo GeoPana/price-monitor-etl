@@ -117,8 +117,16 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
             try:
                 scraper = get_scraper(source_name, source_settings)
                 products = scraper.scrape(limit=limit)
-                scraped_at = datetime.now(timezone.utc)
+                scraper_stats = getattr(scraper, "last_scrape_stats", {})
 
+                fetched_count = scraper_stats.get("raw_records", len(products))
+                valid_count = scraper_stats.get("valid_records", len(products))
+                invalid_count = scraper_stats.get(
+                    "invalid_records",
+                    max(fetched_count - valid_count, 0),
+                )
+
+                scraped_at = datetime.now(timezone.utc)
                 snapshot_records = snapshot_repo.build_snapshot_records(
                     scrape_run_id=scrape_run.id,
                     source_name=source_name,
@@ -132,21 +140,24 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
                     ScrapeRunUpdate(
                         status="succeeded",
                         finished_at=datetime.now(timezone.utc),
-                        records_fetched=len(products),
+                        records_fetched=fetched_count,
                         records_inserted=inserted_count,
                     ),
                 )
                 session.commit()
 
                 logger.info(
-                    "Scrape completed for source=%s fetched=%s inserted=%s",
+                    "Scrape completed for source=%s fetched=%s valid=%s invalid=%s inserted=%s",
                     source_name,
-                    len(products),
+                    fetched_count,
+                    valid_count,
+                    invalid_count,
                     inserted_count,
                 )
                 print(
                     f"Scrape completed for {source_name}: "
-                    f"fetched={len(products)} inserted={inserted_count}"
+                    f"fetched={fetched_count} valid={valid_count} "
+                    f"invalid={invalid_count} inserted={inserted_count}"
                 )
                 return 0
             except Exception as exc:
