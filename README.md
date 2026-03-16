@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for tracking e-commerce product prices.
 
-The first two sprints deliver a working local foundation and the first real scraper:
+The first three sprints deliver a working local foundation, the first real scraper, and a normalization and validation layer:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first two sprints deliver a working local foundation and the first real scra
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with one real static-site scraper, while leaving file-based ETL stages, additional sources, and migrations for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with one real static-site scraper plus a cleanup and validation pipeline, while leaving file-based ETL stages, additional sources, and migrations for future sprints.
 
 ## Highlights
 
@@ -32,9 +32,12 @@ Implemented:
 - `pricemonitor scrape --source site_a`
 - real static-site scraper for `site_a` using Books to Scrape
 - listing-page fetching and detail-page parsing
+- normalization of scraped text, prices, URLs, and availability values
+- validation rules for missing names, missing URLs, and invalid prices
+- tracking of valid vs invalid scraped record counts
 - `scrape_runs` and `product_snapshots` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests covering init + scrape + config output
+- smoke tests and unit tests covering scrape, normalization, validation, and config output
 
 Not implemented yet:
 
@@ -112,7 +115,7 @@ pytest
 Expected scrape output:
 
 ```text
-Scrape completed for site_a: fetched=5 inserted=5
+Scrape completed for site_a: fetched=5 valid=5 invalid=0 inserted=5
 ```
 
 ## Configuration
@@ -260,6 +263,7 @@ pytest
 
 The smoke tests use a temporary SQLite database, so they stay fast and do not depend on Docker.
 They stub the Books to Scrape HTML responses, so tests stay deterministic and do not depend on network access.
+Additional unit tests cover normalization helpers and validation rules directly.
 
 ## Source Configuration
 
@@ -272,6 +276,8 @@ Each source is defined under `configs/sources/`.
 - targets `https://books.toscrape.com/`
 - fetches listing pages and product detail pages
 - extracts product name, category, pricing, availability, product URL, and image URL
+- normalizes messy values before creating `ProductRecord` objects
+- rejects invalid records while continuing the scrape
 
 `site_b`:
 
@@ -288,6 +294,7 @@ logs/pricemonitor.log
 
 The current sprint stores scrape results in PostgreSQL only. Empty `data/raw`, `data/processed`, and `data/exports` directories are expected for now.
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
+The CLI output and logs now report fetched, valid, invalid, and inserted record counts for each scrape.
 
 ## Common Issues
 
@@ -322,7 +329,7 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 - add a second real source integration
 - export snapshots to CSV or Parquet
 - introduce Alembic migrations
-- expand repository and scraper test coverage
+- expand repository and scraper test coverage further
 - improve failure handling and observability
 
 ## License
