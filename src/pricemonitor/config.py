@@ -72,8 +72,6 @@ def load_settings(config_path: str | Path = "configs/settings.yaml") -> AppSetti
     if env_file.exists():
         # Prefer the repo-local .env so CLI runs stay reproducible across shells.
         load_dotenv(env_file)
-    else:
-        load_dotenv()
 
     base_config = _read_yaml(config_path)
     sources_dir = config_path.parent / "sources"

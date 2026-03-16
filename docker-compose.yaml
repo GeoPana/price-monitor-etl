@@ -1,7 +1,7 @@
 # Local development services for the project.
 services:
   db:
-    # Official Postgres image is sufficient; no custom Dockerfile is required yet.
+    # Official Postgres image
     image: postgres:16
     container_name: price-monitor-postgres
     restart: unless-stopped

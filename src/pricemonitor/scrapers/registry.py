@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from pricemonitor.config import SourceSettings
 from pricemonitor.scrapers.base import BaseScraper
-from pricemonitor.scrapers.dummy_site_a import DummySiteAScraper
+from pricemonitor.scrapers.site_a import SiteAScraper
 
 SCRAPER_REGISTRY: dict[str, type[BaseScraper]] = {
-    "site_a": DummySiteAScraper,
-    "dummy_site_a": DummySiteAScraper,
+    "site_a": SiteAScraper,
 }
-
 
 def get_scraper(source_name: str, source_settings: SourceSettings) -> BaseScraper:
     """Resolve a scraper by explicit source name first, then by configured scraper id."""

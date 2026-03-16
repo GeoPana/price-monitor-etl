@@ -21,6 +21,7 @@ class ProductRecord(BaseModel):
     brand: str | None = None
     category: str | None = None
     product_url: str
+    image_url: str | None = None
     currency: str = Field(min_length=3, max_length=3)
     listed_price: Decimal
     sale_price: Decimal | None = None

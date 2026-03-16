@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for tracking e-commerce product prices.
 
-The first sprint delivers a working local foundation:
+The first two sprints deliver a working local foundation and the first real scraper:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first sprint delivers a working local foundation:
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is intentionally narrow. It proves the project shape and data flow with a dummy scraper, while leaving real scraping, file-based ETL stages, and migrations for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with one real static-site scraper, while leaving file-based ETL stages, additional sources, and migrations for future sprints.
 
 ## Highlights
 
@@ -19,6 +19,7 @@ The current implementation is intentionally narrow. It proves the project shape 
 - Psycopg 3
 - Pydantic v2
 - Requests
+- Beautiful Soup 4
 - Pytest
 - PostgreSQL 16 via Docker Compose
 
@@ -29,13 +30,14 @@ Implemented:
 - `pricemonitor show-config`
 - `pricemonitor init-db`
 - `pricemonitor scrape --source site_a`
+- real static-site scraper for `site_a` using Books to Scrape
+- listing-page fetching and detail-page parsing
 - `scrape_runs` and `product_snapshots` tables
 - local logging to `logs/pricemonitor.log`
 - smoke tests covering init + scrape + config output
 
 Not implemented yet:
 
-- real scraper integrations beyond the dummy example
 - writes to `data/raw`, `data/processed`, or `data/exports`
 - scheduling, retries, or orchestration
 - schema migrations
@@ -86,10 +88,10 @@ docker compose up -d db
 pricemonitor init-db
 ```
 
-### 6. Run the demo scrape
+### 6. Run the real scrape
 
 ```powershell
-pricemonitor scrape --source site_a
+pricemonitor scrape --source site_a --limit 5
 ```
 
 ### 7. Run tests
@@ -103,14 +105,14 @@ pytest
 ```powershell
 pricemonitor show-config
 pricemonitor init-db
-pricemonitor scrape --source site_a
+pricemonitor scrape --source site_a --limit 5
 pytest
 ```
 
 Expected scrape output:
 
 ```text
-Scrape completed for site_a: fetched=2 inserted=2
+Scrape completed for site_a: fetched=5 inserted=5
 ```
 
 ## Configuration
@@ -149,7 +151,7 @@ pricemonitor show-config
 pricemonitor init-db
 ```
 
-### Run the demo scraper
+### Run the real scraper
 
 ```powershell
 pricemonitor scrape --source site_a
@@ -257,6 +259,7 @@ pytest
 ```
 
 The smoke tests use a temporary SQLite database, so they stay fast and do not depend on Docker.
+They stub the Books to Scrape HTML responses, so tests stay deterministic and do not depend on network access.
 
 ## Source Configuration
 
@@ -265,8 +268,10 @@ Each source is defined under `configs/sources/`.
 `site_a`:
 
 - enabled
-- backed by the `dummy_site_a` scraper
-- includes sample products for local validation
+- backed by the real `site_a` scraper
+- targets `https://books.toscrape.com/`
+- fetches listing pages and product detail pages
+- extracts product name, category, pricing, availability, product URL, and image URL
 
 `site_b`:
 
@@ -282,6 +287,7 @@ logs/pricemonitor.log
 ```
 
 The current sprint stores scrape results in PostgreSQL only. Empty `data/raw`, `data/processed`, and `data/exports` directories are expected for now.
+The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
 
 ## Common Issues
 
@@ -312,8 +318,8 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 
 ## Next Sprint Candidates
 
-- replace the dummy scraper with a real source integration
 - add raw and processed filesystem outputs
+- add a second real source integration
 - export snapshots to CSV or Parquet
 - introduce Alembic migrations
 - expand repository and scraper test coverage
