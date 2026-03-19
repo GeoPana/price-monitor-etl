@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Real static-site scraper for Books to Scrape."""
+"""Real static-site scraper that extracts raw HTML values and delegates cleanup/validation for Books to Scrape."""
 
 import logging
 from decimal import Decimal
@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup, Tag
 
 from pricemonitor.config import SourceSettings
 from pricemonitor.fetchers.http_fetcher import HttpFetcher
-from pricemonitor.models.schemas import ProductRecord
+from pricemonitor.models.schemas import ArchivedPageRecord, ProductRecord
 from pricemonitor.scrapers.base import BaseScraper
 from pricemonitor.services.validation import validate_product_records
 
@@ -18,13 +18,21 @@ logger = logging.getLogger(__name__)
 
 
 class SiteAScraper(BaseScraper):
-    """Scrape listing pages, extract raw fields, and validate them downstream."""
+    """Scrape listing pages, extract raw fields, and validate products downstream."""
 
     def __init__(self, source_settings: SourceSettings) -> None:
         super().__init__(source_settings)
         self.fetcher = HttpFetcher(timeout_seconds=source_settings.timeout_seconds)
 
     def scrape(self, limit: int | None = None) -> list[ProductRecord]:
+        # Reset run-local state so repeated scraper instances do not leak previous results.
+        self.last_archived_pages = []
+        self.last_scrape_stats = {
+            "raw_records": 0,
+            "valid_records": 0,
+            "invalid_records": 0,
+        }
+
         raw_records: list[dict[str, str | None]] = []
         next_url: str | None = self.source_settings.base_url
         visited_pages: set[str] = set()
@@ -35,6 +43,12 @@ class SiteAScraper(BaseScraper):
             visited_pages.add(next_url)
 
             listing_response = self.fetcher.fetch(next_url)
+            self._remember_raw_page(
+                page_type="listing",
+                page_url=listing_response.url,
+                content=listing_response.text,
+            )
+
             listing_soup = BeautifulSoup(listing_response.text, "html.parser")
             product_cards = listing_soup.select("article.product_pod")
 
@@ -98,6 +112,12 @@ class SiteAScraper(BaseScraper):
         """Extract raw detail-page values without applying business normalization yet."""
 
         detail_response = self.fetcher.fetch(product_url)
+        self._remember_raw_page(
+            page_type="detail",
+            page_url=detail_response.url,
+            content=detail_response.text,
+        )
+
         detail_soup = BeautifulSoup(detail_response.text, "html.parser")
         table_values = self._parse_product_table(detail_soup)
 
@@ -137,6 +157,17 @@ class SiteAScraper(BaseScraper):
             if value not in (None, ""):
                 merged[key] = value
         return merged
+    
+    def _remember_raw_page(self, *, page_type: str, page_url: str, content: str) -> None:
+        """Capture fetched page content so it can be archived after the run completes."""
+
+        self.last_archived_pages.append(
+            ArchivedPageRecord(
+                page_type=page_type,
+                page_url=page_url,
+                content=content,
+            )
+        )
     
     def _parse_product_table(self, soup: BeautifulSoup) -> dict[str, str]:
         values: dict[str, str] = {}

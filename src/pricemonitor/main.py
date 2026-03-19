@@ -12,10 +12,13 @@ from sqlalchemy.exc import OperationalError
 
 from pricemonitor.config import load_settings
 from pricemonitor.logging_config import configure_logging
-from pricemonitor.models.schemas import ScrapeRunCreate, ScrapeRunUpdate
 from pricemonitor.scrapers.registry import get_scraper
 from pricemonitor.storage.database import create_engine_from_url, create_session_factory, init_db
-from pricemonitor.storage.repositories import ProductSnapshotRepository, ScrapeRunRepository
+from pricemonitor.storage.repositories import (
+    ProductSnapshotRepository,
+    RawPageArchiveRepository,
+    ScrapeRunRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,20 +107,18 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
         with session_factory() as session:
             scrape_run_repo = ScrapeRunRepository(session)
             snapshot_repo = ProductSnapshotRepository(session)
+            raw_archive_repo = RawPageArchiveRepository(settings.raw_dir)
 
-            scrape_run = scrape_run_repo.create(
-                ScrapeRunCreate(
-                    source_name=source_name,
-                    started_at=datetime.now(timezone.utc),
-                )
-            )
+            scrape_run = scrape_run_repo.create_scrape_run(source_name)
             # Commit the run record first so downstream failures can still be linked to it.
             session.commit()
 
             try:
                 scraper = get_scraper(source_name, source_settings)
                 products = scraper.scrape(limit=limit)
+
                 scraper_stats = getattr(scraper, "last_scrape_stats", {})
+                archived_pages = getattr(scraper, "last_archived_pages", [])
 
                 fetched_count = scraper_stats.get("raw_records", len(products))
                 valid_count = scraper_stats.get("valid_records", len(products))
@@ -126,49 +127,47 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
                     max(fetched_count - valid_count, 0),
                 )
 
-                scraped_at = datetime.now(timezone.utc)
-                snapshot_records = snapshot_repo.build_snapshot_records(
+                archived_files = raw_archive_repo.archive_pages(
+                    source_name=source_name,
+                    scrape_run_id=scrape_run.id,
+                    pages=archived_pages,
+                )
+
+                inserted_count = snapshot_repo.insert_product_snapshots(
                     scrape_run_id=scrape_run.id,
                     source_name=source_name,
                     products=products,
-                    scraped_at=scraped_at,
+                    scraped_at=datetime.now(timezone.utc),
                 )
-                inserted_count = snapshot_repo.bulk_create(snapshot_records)
 
-                scrape_run_repo.update(
+                scrape_run_repo.complete_scrape_run(
                     scrape_run.id,
-                    ScrapeRunUpdate(
-                        status="succeeded",
-                        finished_at=datetime.now(timezone.utc),
-                        records_fetched=fetched_count,
-                        records_inserted=inserted_count,
-                    ),
+                    records_fetched=fetched_count,
+                    records_inserted=inserted_count,
                 )
                 session.commit()
 
                 logger.info(
-                    "Scrape completed for source=%s fetched=%s valid=%s invalid=%s inserted=%s",
+                    "Scrape completed for source=%s fetched=%s valid=%s invalid=%s inserted=%s archived=%s",
                     source_name,
                     fetched_count,
                     valid_count,
                     invalid_count,
                     inserted_count,
+                    len(archived_files),
                 )
                 print(
                     f"Scrape completed for {source_name}: "
                     f"fetched={fetched_count} valid={valid_count} "
-                    f"invalid={invalid_count} inserted={inserted_count}"
+                    f"invalid={invalid_count} inserted={inserted_count} "
+                    f"archived={len(archived_files)}"
                 )
                 return 0
             except Exception as exc:
                 session.rollback()
-                scrape_run_repo.update(
+                scrape_run_repo.fail_scrape_run(
                     scrape_run.id,
-                    ScrapeRunUpdate(
-                        status="failed",
-                        finished_at=datetime.now(timezone.utc),
-                        error_message=str(exc),
-                    ),
+                    error_message=str(exc),
                 )
                 session.commit()
                 logger.exception("Scrape failed for source=%s", source_name)

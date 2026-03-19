@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ScrapeRunStatus = Literal["running", "succeeded", "failed"]
+RawPageType = Literal["listing", "detail"]
 
 
 class ProductRecord(BaseModel):
@@ -38,6 +39,14 @@ class ProductRecord(BaseModel):
         if value is not None and value < 0:
             raise ValueError("Price cannot be negative.")
         return value
+
+
+class ArchivedPageRecord(BaseModel):
+    """Raw page content captured during scraping for audit and replay."""
+
+    page_type: RawPageType
+    page_url: str
+    content: str
 
 
 class ScrapeRunCreate(BaseModel):

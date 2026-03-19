@@ -30,7 +30,7 @@ LISTING_HTML = dedent(
               </a>
             </h3>
             <div class="product_price">
-              <p class="price_color"> Â£10.00 </p>
+              <p class="price_color"> Ã‚Â£10.00 </p>
               <p class="instock availability"> In stock </p>
             </div>
           </article>
@@ -46,7 +46,7 @@ LISTING_HTML = dedent(
               </a>
             </h3>
             <div class="product_price">
-              <p class="price_color"> Â£-22.50 </p>
+              <p class="price_color"> Ã‚Â£-22.50 </p>
               <p class="instock availability"> Out of stock </p>
             </div>
           </article>
@@ -69,7 +69,7 @@ DETAIL_ONE_HTML = dedent(
         </ul>
         <div class="product_main">
           <h1>  Test Book One  </h1>
-          <p class="price_color"> Â£10.00 </p>
+          <p class="price_color"> Ã‚Â£10.00 </p>
           <p class="instock availability"> In stock (20 available) </p>
         </div>
         <div class="item active">
@@ -77,7 +77,7 @@ DETAIL_ONE_HTML = dedent(
         </div>
         <table class="table table-striped">
           <tr><th>UPC</th><td>UPC-BOOK-1</td></tr>
-          <tr><th>Price (incl. tax)</th><td>Â£10.00</td></tr>
+          <tr><th>Price (incl. tax)</th><td>Ã‚Â£10.00</td></tr>
           <tr><th>Availability</th><td>In stock (20 available)</td></tr>
         </table>
       </body>
@@ -97,7 +97,7 @@ DETAIL_TWO_HTML = dedent(
         </ul>
         <div class="product_main">
           <h1>   </h1>
-          <p class="price_color"> Â£-22.50 </p>
+          <p class="price_color"> Ã‚Â£-22.50 </p>
           <p class="instock availability"> Out of stock </p>
         </div>
         <div class="item active">
@@ -105,7 +105,7 @@ DETAIL_TWO_HTML = dedent(
         </div>
         <table class="table table-striped">
           <tr><th>UPC</th><td>UPC-BOOK-2</td></tr>
-          <tr><th>Price (incl. tax)</th><td>Â£-22.50</td></tr>
+          <tr><th>Price (incl. tax)</th><td>Ã‚Â£-22.50</td></tr>
           <tr><th>Availability</th><td>Out of stock</td></tr>
         </table>
       </body>
@@ -197,7 +197,7 @@ def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
     assert main(["--config", str(config_path), "scrape", "--source", "site_a"]) == 0
     scrape_output = capsys.readouterr().out
 
-    assert "fetched=2 valid=1 invalid=1 inserted=1" in scrape_output
+    assert "fetched=2 valid=1 invalid=1 inserted=1 archived=3" in scrape_output
 
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     with engine.connect() as connection:
@@ -241,7 +241,18 @@ def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
 
     assert first_payload["image_url"].endswith("test-book-one-large.jpg")
 
+    raw_run_dir = tmp_path / "data" / "raw" / "site_a" / "run_1"
+    assert raw_run_dir.exists()
 
+    archived_html = sorted(raw_run_dir.glob("*.html"))
+    assert len(archived_html) == 3
+
+    manifest = json.loads((raw_run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest) == 3
+    assert manifest[0]["page_type"] == "listing"
+    assert manifest[1]["page_type"] == "detail"
+
+    
 def test_show_config_smoke(tmp_path: Path, capsys) -> None:
     """Verify that the CLI prints the resolved configuration."""
 

@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for tracking e-commerce product prices.
 
-The first three sprints deliver a working local foundation, the first real scraper, and a normalization and validation layer:
+The first four sprints deliver a working local foundation, the first real scraper, a normalization and validation layer, and cleaner persistence orchestration:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first three sprints deliver a working local foundation, the first real scrap
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with one real static-site scraper plus a cleanup and validation pipeline, while leaving file-based ETL stages, additional sources, and migrations for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with one real static-site scraper, a cleanup and validation pipeline, and repository-based persistence helpers, while leaving processed exports, additional sources, and migrations for future sprints.
 
 ## Highlights
 
@@ -35,13 +35,15 @@ Implemented:
 - normalization of scraped text, prices, URLs, and availability values
 - validation rules for missing names, missing URLs, and invalid prices
 - tracking of valid vs invalid scraped record counts
+- repository helpers for scrape-run lifecycle updates and snapshot insertion
+- raw HTML archive support under `data/raw/`
 - `scrape_runs` and `product_snapshots` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests and unit tests covering scrape, normalization, validation, and config output
+- smoke tests and unit tests covering scrape, normalization, validation, repository behavior, and config output
 
 Not implemented yet:
 
-- writes to `data/raw`, `data/processed`, or `data/exports`
+- writes to `data/processed` or `data/exports`
 - scheduling, retries, or orchestration
 - schema migrations
 
@@ -115,7 +117,7 @@ pytest
 Expected scrape output:
 
 ```text
-Scrape completed for site_a: fetched=5 valid=5 invalid=0 inserted=5
+Scrape completed for site_a: fetched=5 valid=5 invalid=0 inserted=5 archived=6
 ```
 
 ## Configuration
@@ -200,10 +202,14 @@ price-monitor-etl/
 |       |-- main.py
 |       |-- fetchers/
 |       |-- models/
+|       |-- parsers/
 |       |-- scrapers/
+|       |-- services/
 |       `-- storage/
 |-- tests/
-|   `-- test_smoke.py
+|   |-- test_smoke.py
+|   |-- test_storage_repositories.py
+|   `-- test_validation.py
 |-- .env.example
 |-- docker-compose.yaml
 |-- Makefile
@@ -264,6 +270,7 @@ pytest
 The smoke tests use a temporary SQLite database, so they stay fast and do not depend on Docker.
 They stub the Books to Scrape HTML responses, so tests stay deterministic and do not depend on network access.
 Additional unit tests cover normalization helpers and validation rules directly.
+Repository tests cover scrape-run lifecycle helpers, snapshot insertion, and raw-page archive output.
 
 ## Source Configuration
 
@@ -278,6 +285,7 @@ Each source is defined under `configs/sources/`.
 - extracts product name, category, pricing, availability, product URL, and image URL
 - normalizes messy values before creating `ProductRecord` objects
 - rejects invalid records while continuing the scrape
+- archives fetched listing and detail HTML pages for each run
 
 `site_b`:
 
@@ -294,7 +302,8 @@ logs/pricemonitor.log
 
 The current sprint stores scrape results in PostgreSQL only. Empty `data/raw`, `data/processed`, and `data/exports` directories are expected for now.
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
-The CLI output and logs now report fetched, valid, invalid, and inserted record counts for each scrape.
+The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
+The CLI output and logs now report fetched, valid, invalid, inserted, and archived page counts for each scrape.
 
 ## Common Issues
 
@@ -325,11 +334,11 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 
 ## Next Sprint Candidates
 
-- add raw and processed filesystem outputs
+- add processed filesystem outputs
 - add a second real source integration
 - export snapshots to CSV or Parquet
 - introduce Alembic migrations
-- expand repository and scraper test coverage further
+- expand repository and scraper query helpers further
 - improve failure handling and observability
 
 ## License
