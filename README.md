@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for tracking e-commerce product prices.
 
-The first five sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, and cleaner persistence orchestration:
+The first six sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, and browser automation support:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first five sprints deliver a working local foundation, two real scrapers, a 
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with two different real source integrations, a shared cleanup and validation pipeline, and repository-based persistence helpers, while leaving processed exports and migrations for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, and repository-based persistence helpers, while leaving processed exports and migrations for future sprints.
 
 ## Highlights
 
@@ -20,6 +20,7 @@ The current implementation is still intentionally narrow. It now proves the proj
 - Pydantic v2
 - Requests
 - Beautiful Soup 4
+- Playwright
 - Pytest
 - PostgreSQL 16 via Docker Compose
 
@@ -33,8 +34,10 @@ Implemented:
 - `pricemonitor scrape --source site_b`
 - `pricemonitor scrape --source all`
 - real static-site scraper for `site_a` using Books to Scrape
-- real static-site scraper for `site_b` using the Web Scraper test e-commerce site
-- shared scrape, validation, repository, and archive pipeline across both sources
+- browser-rendered scraper support using Playwright
+- browser fetcher and HTTP fetcher selected per source configuration
+- real browser-rendered scraper for `site_b` using the Web Scraper AJAX test e-commerce site
+- shared scrape, validation, repository, and archive pipeline across both static and dynamic sources
 - normalization of scraped text, prices, URLs, and availability values
 - validation rules for missing names, missing URLs, and invalid prices
 - tracking of valid vs invalid scraped record counts
@@ -65,6 +68,12 @@ conda activate price-monitor-etl
 
 ```powershell
 pip install -e .[dev]
+```
+
+Install Chromium for Playwright:
+
+```powershell
+playwright install chromium
 ```
 
 ### 3. Create `.env`
@@ -121,6 +130,7 @@ pricemonitor show-config
 pricemonitor init-db
 pricemonitor scrape --source site_a --limit 5
 pricemonitor scrape --source site_b --limit 5
+pricemonitor scrape --source all --limit 2
 pytest
 ```
 
@@ -294,6 +304,7 @@ The smoke tests use a temporary SQLite database, so they stay fast and do not de
 They stub both source HTML responses, so tests stay deterministic and do not depend on network access.
 Additional unit tests cover normalization helpers and validation rules directly.
 Repository tests cover scrape-run lifecycle helpers, snapshot insertion, and raw-page archive output.
+Fetcher tests cover HTTP vs browser fetcher selection.
 
 ## Source Configuration
 
@@ -314,7 +325,8 @@ Each source is defined under `configs/sources/`.
 
 - enabled
 - backed by the real `site_b` scraper
-- targets `https://webscraper.io/test-sites/e-commerce/static/computers/laptops`
+- targets `https://webscraper.io/test-sites/e-commerce/ajax/computers/laptops`
+- uses the Playwright-backed browser fetcher to parse rendered HTML
 - reuses the same validation, repository, and raw-archive pipeline as `site_a`
 - extracts product name, category, price, URL, and image URL from a different card layout
 - archives the source listing HTML for each run
@@ -332,6 +344,7 @@ The `product_snapshots.payload` field keeps the full scraped record, including f
 The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
 The CLI output and logs now report fetched, valid, invalid, inserted, and archived page counts for each scrape.
 When you use `--source all`, the CLI runs each enabled source in sequence and prints a final summary line after all of them complete.
+Dynamic sources can switch from the HTTP fetcher to the browser fetcher through source configuration without changing the downstream storage or validation pipeline.
 
 ## Common Issues
 
@@ -366,6 +379,7 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 - export snapshots to CSV or Parquet
 - introduce Alembic migrations
 - add richer multi-source orchestration and retry behavior
+- add browser-specific wait strategies and richer page interaction helpers
 - expand repository and scraper query helpers further
 - improve failure handling and observability
 

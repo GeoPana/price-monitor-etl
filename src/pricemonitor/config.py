@@ -20,6 +20,10 @@ class SourceSettings(BaseModel):
     scraper: str
     fetcher: str = "http"
     timeout_seconds: int = 10
+    user_agent: str | None = None
+    browser_headless: bool = True
+    browser_wait_for_selector: str | None = None
+    browser_wait_for_timeout_ms: int | None = None
     sample_products: list[dict[str, Any]] = Field(default_factory=list)
 
 

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, text
 
 from pricemonitor.fetchers.base import FetchResponse
 from pricemonitor.fetchers.http_fetcher import HttpFetcher
+from pricemonitor.fetchers.browser_fetcher import BrowserFetcher
 from pricemonitor.main import main
 
 
@@ -113,7 +114,7 @@ SITE_A_DETAIL_TWO_HTML = dedent(
     """
 )
 
-SITE_B_LISTING_HTML = dedent(
+SITE_B_RENDERED_HTML = dedent(
     """\
     <html>
       <body>
@@ -125,7 +126,7 @@ SITE_B_LISTING_HTML = dedent(
                 <div class="caption">
                   <h4 class="price">$999.99</h4>
                   <h4>
-                    <a class="title" href="/test-sites/e-commerce/static/product/101" title="  Laptop One  ">
+                    <a class="title" href="/test-sites/e-commerce/ajax/product/101" title="  Laptop One  ">
                       Laptop One
                     </a>
                   </h4>
@@ -143,7 +144,7 @@ SITE_B_LISTING_HTML = dedent(
                 <div class="caption">
                   <h4 class="price">$1,299.00</h4>
                   <h4>
-                    <a class="title" href="/test-sites/e-commerce/static/product/102" title="Laptop Two">
+                    <a class="title" href="/test-sites/e-commerce/ajax/product/102" title="Laptop Two">
                       Laptop Two
                     </a>
                   </h4>
@@ -212,8 +213,10 @@ def write_test_config(root: Path) -> Path:
                 "enabled: true",
                 "base_url: https://webscraper.io/test-sites/e-commerce/static/computers/laptops",
                 "scraper: site_b",
-                "fetcher: http",
+                "fetcher: browser",
                 "timeout_seconds: 10",
+                "browser_headless: true",
+                "browser_wait_for_selector: div.thumbnail",
             ]
         ),
         encoding="utf-8",
@@ -229,7 +232,7 @@ def stub_fetchers(monkeypatch) -> None:
         "https://books.toscrape.com/": SITE_A_LISTING_HTML,
         "https://books.toscrape.com/catalogue/test-book-one_1/index.html": SITE_A_DETAIL_ONE_HTML,
         "https://books.toscrape.com/catalogue/test-book-two_2/index.html": SITE_A_DETAIL_TWO_HTML,
-        "https://webscraper.io/test-sites/e-commerce/static/computers/laptops": SITE_B_LISTING_HTML,
+        "https://webscraper.io/test-sites/e-commerce/static/computers/laptops": SITE_B_RENDERED_HTML
     }
 
     def fake_fetch(self, url: str) -> FetchResponse:
@@ -244,6 +247,7 @@ def stub_fetchers(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(HttpFetcher, "fetch", fake_fetch)
+    monkeypatch.setattr(BrowserFetcher, "fetch", fake_fetch)
 
 
 def test_init_db_and_scrape_site_a_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -355,9 +359,13 @@ def test_scrape_site_b_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
 
     assert first_payload["image_url"].endswith("/images/test-laptop-1.jpg")
 
+    raw_run_dir = tmp_path / "data" / "raw" / "site_b" / "run_1"
+    assert raw_run_dir.exists()
+    assert len(list(raw_run_dir.glob("*.html"))) == 1
+
 
 def test_scrape_all_sources_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
-    """Verify the CLI can run all enabled sources in sequence."""
+    """Verify the CLI can run both static and browser-backed sources in sequence."""
 
     config_path = write_test_config(tmp_path)
     db_path = tmp_path / "test.db"
@@ -383,7 +391,7 @@ def test_scrape_all_sources_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
    
     
 def test_show_config_smoke(tmp_path: Path, capsys) -> None:
-    """Verify that the CLI prints the resolved configuration."""
+    """Verify that the CLI prints the resolved configuration, including browser settings."""
 
     config_path = write_test_config(tmp_path)
 
@@ -393,4 +401,5 @@ def test_show_config_smoke(tmp_path: Path, capsys) -> None:
     assert "Price Monitor ETL" in output
     assert "site_a" in output
     assert "site_b" in output
+    assert "browser" in output
     assert "sqlite" in output

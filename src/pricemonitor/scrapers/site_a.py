@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup, Tag
 
 from pricemonitor.config import SourceSettings
-from pricemonitor.fetchers.http_fetcher import HttpFetcher
+from pricemonitor.fetchers.factory import create_fetcher
 from pricemonitor.models.schemas import ArchivedPageRecord, ProductRecord
 from pricemonitor.scrapers.base import BaseScraper
 from pricemonitor.services.validation import validate_product_records
@@ -22,7 +22,7 @@ class SiteAScraper(BaseScraper):
 
     def __init__(self, source_settings: SourceSettings) -> None:
         super().__init__(source_settings)
-        self.fetcher = HttpFetcher(timeout_seconds=source_settings.timeout_seconds)
+        self.fetcher = create_fetcher(source_settings)
 
     def scrape(self, limit: int | None = None) -> list[ProductRecord]:
         # Reset run-local state so repeated scraper instances do not leak previous results.

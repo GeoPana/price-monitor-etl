@@ -3,12 +3,11 @@ from __future__ import annotations
 """Second real scraper using the Web Scraper test e-commerce site."""
 
 import logging
-from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Tag
 
 from pricemonitor.config import SourceSettings
-from pricemonitor.fetchers.http_fetcher import HttpFetcher
+from pricemonitor.fetchers.factory import create_fetcher
 from pricemonitor.models.schemas import ArchivedPageRecord, ProductRecord
 from pricemonitor.scrapers.base import BaseScraper
 from pricemonitor.services.validation import validate_product_records
@@ -17,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 class SiteBScraper(BaseScraper):
-    """Scrape a different card layout while reusing the same validation pipeline."""
+    """Scrape a JavaScript-rendered card layout while reusing the same downstream pipeline."""
 
     def __init__(self, source_settings: SourceSettings) -> None:
         super().__init__(source_settings)
-        self.fetcher = HttpFetcher(timeout_seconds=source_settings.timeout_seconds)
+        self.fetcher = create_fetcher(source_settings)
 
     def scrape(self, limit: int | None = None) -> list[ProductRecord]:
         # Reset per-run state so repeated calls stay deterministic.
@@ -63,7 +62,7 @@ class SiteBScraper(BaseScraper):
         return summary.valid_records
 
     def _extract_listing_card(self, card: Tag, page_url: str) -> dict[str, str | None]:
-        """Extract raw values from the Web Scraper test-site card layout."""
+        """Extract raw values from the rendered product-card layout."""
 
         product_link = card.select_one("a.title")
         if product_link is None or not product_link.get("href"):

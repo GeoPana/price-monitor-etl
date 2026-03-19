@@ -3,6 +3,10 @@ name: site_b
 enabled: true
 base_url: https://webscraper.io/test-sites/e-commerce/static/computers/laptops
 scraper: site_b
-fetcher: http
-timeout_seconds: 10
+fetcher: browser
+timeout_seconds: 15
+browser_headless: true
+browser_wait_for_selector: div.thumbnail
+browser_wait_for_timeout_ms:
+user_agent: PriceMonitorETL/0.1
 sample_products: []
