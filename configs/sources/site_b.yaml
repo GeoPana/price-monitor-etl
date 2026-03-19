@@ -1,8 +1,8 @@
-# Placeholder for a future source implementation.
+# Second real source used to prove the scraper architecture is reusable.
 name: site_b
-enabled: false
-base_url: https://example.com/site-b
-scraper: unimplemented
+enabled: true
+base_url: https://webscraper.io/test-sites/e-commerce/static/computers/laptops
+scraper: site_b
 fetcher: http
 timeout_seconds: 10
 sample_products: []

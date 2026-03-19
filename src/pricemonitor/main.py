@@ -10,7 +10,7 @@ from typing import Sequence
 
 from sqlalchemy.exc import OperationalError
 
-from pricemonitor.config import load_settings
+from pricemonitor.config import AppSettings, SourceSettings, load_settings
 from pricemonitor.logging_config import configure_logging
 from pricemonitor.scrapers.registry import get_scraper
 from pricemonitor.storage.database import create_engine_from_url, create_session_factory, init_db
@@ -44,54 +44,16 @@ def _format_db_operational_error(exc: OperationalError, database_url: str) -> st
         f"Original error: {exc}"
     )
 
+def _resolve_target_sources(settings: AppSettings, source_name: str) -> list[str]:
+    """Resolve a single source or the set of all enabled sources."""
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the top-level CLI parser."""
-
-    parser = argparse.ArgumentParser(prog="pricemonitor", description="Price Monitor ETL CLI")
-    parser.add_argument(
-        "--config",
-        default="configs/settings.yaml",
-        help="Path to the main YAML configuration file.",
-    )
-
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    subparsers.add_parser("init-db", help="Create database tables.")
-    subparsers.add_parser("show-config", help="Print resolved application configuration.")
-
-    scrape_parser = subparsers.add_parser("scrape", help="Run a scrape for a specific source.")
-    scrape_parser.add_argument("--source", required=True, help="Source name, e.g. site_a")
-    scrape_parser.add_argument("--limit", type=int, default=None, help="Optional record limit")
-
-    return parser
-
-
-def handle_init_db(database_url: str) -> int:
-    """Initialize the configured database schema."""
-
-    try:
-        engine = create_engine_from_url(database_url)
-        init_db(engine)
-    except OperationalError as exc:
-        raise SystemExit(_format_db_operational_error(exc, database_url)) from exc
-    print("Database initialized.")
-    return 0
-
-
-def handle_show_config(config_path: str) -> int:
-    """Print the resolved configuration for inspection and debugging."""
-
-    settings = load_settings(config_path)
-    print(json.dumps(settings.model_dump(mode="json"), indent=2))
-    return 0
-
-
-def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
-    """Run a scrape for a configured source and persist its results."""
-
-    settings = load_settings(config_path)
-    configure_logging(settings.log_level, settings.log_file)
+    if source_name == "all":
+        enabled_sources = [
+            name for name, source_settings in settings.sources.items() if source_settings.enabled
+        ]
+        if not enabled_sources:
+            raise ValueError("No enabled sources found for --source all.")
+        return enabled_sources
 
     if source_name not in settings.sources:
         raise ValueError(f"Unknown source: {source_name}")
@@ -99,6 +61,18 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
     source_settings = settings.sources[source_name]
     if not source_settings.enabled:
         raise ValueError(f"Source '{source_name}' is disabled.")
+
+    return [source_name]
+
+
+def _run_single_source_scrape(
+    *,
+    settings: AppSettings,
+    source_name: str,
+    source_settings: SourceSettings,
+    limit: int | None,
+) -> None:
+    """Run the full scrape/persist/archive flow for a single source."""
 
     try:
         engine = create_engine_from_url(settings.database_url)
@@ -148,7 +122,10 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
                 session.commit()
 
                 logger.info(
-                    "Scrape completed for source=%s fetched=%s valid=%s invalid=%s inserted=%s archived=%s",
+                    (
+                        "Scrape completed for source=%s fetched=%s valid=%s "
+                        "invalid=%s inserted=%s archived=%s"
+                    ),
                     source_name,
                     fetched_count,
                     valid_count,
@@ -162,7 +139,6 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
                     f"invalid={invalid_count} inserted={inserted_count} "
                     f"archived={len(archived_files)}"
                 )
-                return 0
             except Exception as exc:
                 session.rollback()
                 scrape_run_repo.fail_scrape_run(
@@ -174,6 +150,77 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
                 raise
     except OperationalError as exc:
         raise SystemExit(_format_db_operational_error(exc, settings.database_url)) from exc
+    
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the top-level CLI parser."""
+
+    parser = argparse.ArgumentParser(prog="pricemonitor", description="Price Monitor ETL CLI")
+    parser.add_argument(
+        "--config",
+        default="configs/settings.yaml",
+        help="Path to the main YAML configuration file.",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("init-db", help="Create database tables.")
+    subparsers.add_parser("show-config", help="Print resolved application configuration.")
+
+    scrape_parser = subparsers.add_parser("scrape", help="Run a scrape for a specific source.")
+    scrape_parser.add_argument("--source", required=True, help="Source name, e.g. site_a")
+    scrape_parser.add_argument("--limit", type=int, default=None, help="Optional record limit")
+
+    return parser
+
+
+def handle_init_db(database_url: str) -> int:
+    """Initialize the configured database schema."""
+
+    try:
+        engine = create_engine_from_url(database_url)
+        init_db(engine)
+    except OperationalError as exc:
+        raise SystemExit(_format_db_operational_error(exc, database_url)) from exc
+    print("Database initialized.")
+    return 0
+
+
+def handle_show_config(config_path: str) -> int:
+    """Print the resolved configuration for inspection and debugging."""
+
+    settings = load_settings(config_path)
+    print(json.dumps(settings.model_dump(mode="json"), indent=2))
+    return 0
+
+
+def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
+    """Run a scrape for a configured source or all enabled sources and persist its/theirs results."""
+
+    settings = load_settings(config_path)
+    configure_logging(settings.log_level, settings.log_file)
+
+    target_sources = _resolve_target_sources(settings, source_name)
+    exit_code = 0
+
+    for resolved_source_name in target_sources:
+        try:
+            _run_single_source_scrape(
+                settings=settings,
+                source_name=resolved_source_name,
+                source_settings=settings.sources[resolved_source_name],
+                limit=limit,
+            )
+        except Exception:
+            exit_code = 1
+            if source_name != "all":
+                raise
+            logger.exception("Scrape failed for source=%s during all-source run", resolved_source_name)
+
+    if source_name == "all" and exit_code == 0:
+        print(f"All enabled scrapes completed successfully: {', '.join(target_sources)}")
+
+    return exit_code
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -13,7 +13,7 @@ from pricemonitor.fetchers.http_fetcher import HttpFetcher
 from pricemonitor.main import main
 
 
-LISTING_HTML = dedent(
+SITE_A_LISTING_HTML = dedent(
     """\
     <html>
       <body>
@@ -57,7 +57,7 @@ LISTING_HTML = dedent(
 )
 
 
-DETAIL_ONE_HTML = dedent(
+SITE_A_DETAIL_ONE_HTML = dedent(
     """\
     <html>
       <body>
@@ -85,7 +85,7 @@ DETAIL_ONE_HTML = dedent(
     """
 )
 
-DETAIL_TWO_HTML = dedent(
+SITE_A_DETAIL_TWO_HTML = dedent(
     """\
     <html>
       <body>
@@ -108,6 +108,54 @@ DETAIL_TWO_HTML = dedent(
           <tr><th>Price (incl. tax)</th><td>Ã‚Â£-22.50</td></tr>
           <tr><th>Availability</th><td>Out of stock</td></tr>
         </table>
+      </body>
+    </html>
+    """
+)
+
+SITE_B_LISTING_HTML = dedent(
+    """\
+    <html>
+      <body>
+        <div class="col-md-9">
+          <div class="row">
+            <div class="col-md-4 col-xl-4 col-lg-4">
+              <div class="thumbnail">
+                <img class="img-responsive" src="/images/test-laptop-1.jpg" alt="Laptop One">
+                <div class="caption">
+                  <h4 class="price">$999.99</h4>
+                  <h4>
+                    <a class="title" href="/test-sites/e-commerce/static/product/101" title="  Laptop One  ">
+                      Laptop One
+                    </a>
+                  </h4>
+                  <p class="description">  Solid productivity laptop  </p>
+                </div>
+                <div class="ratings">
+                  <p class="pull-right">5 reviews</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-md-4 col-xl-4 col-lg-4">
+              <div class="thumbnail">
+                <img class="img-responsive" src="/images/test-laptop-2.jpg" alt="Laptop Two">
+                <div class="caption">
+                  <h4 class="price">$1,299.00</h4>
+                  <h4>
+                    <a class="title" href="/test-sites/e-commerce/static/product/102" title="Laptop Two">
+                      Laptop Two
+                    </a>
+                  </h4>
+                  <p class="description">  Higher-end model  </p>
+                </div>
+                <div class="ratings">
+                  <p class="pull-right">12 reviews</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </body>
     </html>
     """
@@ -157,16 +205,31 @@ def write_test_config(root: Path) -> Path:
         encoding="utf-8",
     )
 
+    (sources_dir / "site_b.yaml").write_text(
+        "\n".join(
+            [
+                "name: site_b",
+                "enabled: true",
+                "base_url: https://webscraper.io/test-sites/e-commerce/static/computers/laptops",
+                "scraper: site_b",
+                "fetcher: http",
+                "timeout_seconds: 10",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    
     return configs_dir / "settings.yaml"
 
 
-def stub_site_a_fetcher(monkeypatch) -> None:
+def stub_fetchers(monkeypatch) -> None:
     """Replace outbound HTTP calls with deterministic HTML fixtures."""
 
     pages = {
-        "https://books.toscrape.com/": LISTING_HTML,
-        "https://books.toscrape.com/catalogue/test-book-one_1/index.html": DETAIL_ONE_HTML,
-        "https://books.toscrape.com/catalogue/test-book-two_2/index.html": DETAIL_TWO_HTML,
+        "https://books.toscrape.com/": SITE_A_LISTING_HTML,
+        "https://books.toscrape.com/catalogue/test-book-one_1/index.html": SITE_A_DETAIL_ONE_HTML,
+        "https://books.toscrape.com/catalogue/test-book-two_2/index.html": SITE_A_DETAIL_TWO_HTML,
+        "https://webscraper.io/test-sites/e-commerce/static/computers/laptops": SITE_B_LISTING_HTML,
     }
 
     def fake_fetch(self, url: str) -> FetchResponse:
@@ -183,12 +246,12 @@ def stub_site_a_fetcher(monkeypatch) -> None:
     monkeypatch.setattr(HttpFetcher, "fetch", fake_fetch)
 
 
-def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_init_db_and_scrape_site_a_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
     """Verify schema creation and a single real-scraper flow end to end."""
 
     config_path = write_test_config(tmp_path)
     db_path = tmp_path / "test.db"
-    stub_site_a_fetcher(monkeypatch)
+    stub_fetchers(monkeypatch)
 
     assert main(["--config", str(config_path), "init-db"]) == 0
     assert db_path.exists()
@@ -252,6 +315,72 @@ def test_init_db_and_scrape_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
     assert manifest[0]["page_type"] == "listing"
     assert manifest[1]["page_type"] == "detail"
 
+def test_scrape_site_b_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Verify the second source reuses the same validation and storage pipeline."""
+
+    config_path = write_test_config(tmp_path)
+    db_path = tmp_path / "test.db"
+    stub_fetchers(monkeypatch)
+
+    assert main(["--config", str(config_path), "init-db"]) == 0
+    capsys.readouterr()
+
+    assert main(["--config", str(config_path), "scrape", "--source", "site_b"]) == 0
+    scrape_output = capsys.readouterr().out
+
+    assert "fetched=2 valid=2 invalid=0 inserted=2 archived=1" in scrape_output
+
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    with engine.connect() as connection:
+        snapshots = connection.execute(
+            text(
+                """
+                SELECT source_name, external_id, product_name, category, availability, payload
+                FROM product_snapshots
+                ORDER BY id
+                """
+            )
+        ).mappings().all()
+
+    assert len(snapshots) == 2
+    assert snapshots[0]["source_name"] == "site_b"
+    assert snapshots[0]["external_id"] == "101"
+    assert snapshots[0]["product_name"] == "Laptop One"
+    assert snapshots[0]["category"] == "Laptops"
+    assert snapshots[0]["availability"] == "unknown"
+
+    first_payload = snapshots[0]["payload"]
+    if isinstance(first_payload, str):
+        first_payload = json.loads(first_payload)
+
+    assert first_payload["image_url"].endswith("/images/test-laptop-1.jpg")
+
+
+def test_scrape_all_sources_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Verify the CLI can run all enabled sources in sequence."""
+
+    config_path = write_test_config(tmp_path)
+    db_path = tmp_path / "test.db"
+    stub_fetchers(monkeypatch)
+
+    assert main(["--config", str(config_path), "init-db"]) == 0
+    capsys.readouterr()
+
+    assert main(["--config", str(config_path), "scrape", "--source", "all"]) == 0
+    scrape_output = capsys.readouterr().out
+
+    assert "Scrape completed for site_a" in scrape_output
+    assert "Scrape completed for site_b" in scrape_output
+    assert "All enabled scrapes completed successfully: site_a, site_b" in scrape_output
+
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    with engine.connect() as connection:
+        scrape_runs_count = connection.execute(text("SELECT COUNT(*) FROM scrape_runs")).scalar_one()
+        snapshots_count = connection.execute(text("SELECT COUNT(*) FROM product_snapshots")).scalar_one()
+
+    assert scrape_runs_count == 2
+    assert snapshots_count == 3
+   
     
 def test_show_config_smoke(tmp_path: Path, capsys) -> None:
     """Verify that the CLI prints the resolved configuration."""
@@ -263,4 +392,5 @@ def test_show_config_smoke(tmp_path: Path, capsys) -> None:
 
     assert "Price Monitor ETL" in output
     assert "site_a" in output
+    assert "site_b" in output
     assert "sqlite" in output

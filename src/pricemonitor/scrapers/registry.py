@@ -5,9 +5,11 @@ from __future__ import annotations
 from pricemonitor.config import SourceSettings
 from pricemonitor.scrapers.base import BaseScraper
 from pricemonitor.scrapers.site_a import SiteAScraper
+from pricemonitor.scrapers.site_b import SiteBScraper
 
 SCRAPER_REGISTRY: dict[str, type[BaseScraper]] = {
     "site_a": SiteAScraper,
+    "site_b": SiteBScraper,
 }
 
 def get_scraper(source_name: str, source_settings: SourceSettings) -> BaseScraper:

@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for tracking e-commerce product prices.
 
-The first four sprints deliver a working local foundation, the first real scraper, a normalization and validation layer, and cleaner persistence orchestration:
+The first five sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, and cleaner persistence orchestration:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first four sprints deliver a working local foundation, the first real scrape
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with one real static-site scraper, a cleanup and validation pipeline, and repository-based persistence helpers, while leaving processed exports, additional sources, and migrations for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with two different real source integrations, a shared cleanup and validation pipeline, and repository-based persistence helpers, while leaving processed exports and migrations for future sprints.
 
 ## Highlights
 
@@ -30,8 +30,11 @@ Implemented:
 - `pricemonitor show-config`
 - `pricemonitor init-db`
 - `pricemonitor scrape --source site_a`
+- `pricemonitor scrape --source site_b`
+- `pricemonitor scrape --source all`
 - real static-site scraper for `site_a` using Books to Scrape
-- listing-page fetching and detail-page parsing
+- real static-site scraper for `site_b` using the Web Scraper test e-commerce site
+- shared scrape, validation, repository, and archive pipeline across both sources
 - normalization of scraped text, prices, URLs, and availability values
 - validation rules for missing names, missing URLs, and invalid prices
 - tracking of valid vs invalid scraped record counts
@@ -93,10 +96,16 @@ docker compose up -d db
 pricemonitor init-db
 ```
 
-### 6. Run the real scrape
+### 6. Run a real scrape
 
 ```powershell
 pricemonitor scrape --source site_a --limit 5
+```
+
+Or run both enabled sources:
+
+```powershell
+pricemonitor scrape --source all --limit 2
 ```
 
 ### 7. Run tests
@@ -111,6 +120,7 @@ pytest
 pricemonitor show-config
 pricemonitor init-db
 pricemonitor scrape --source site_a --limit 5
+pricemonitor scrape --source site_b --limit 5
 pytest
 ```
 
@@ -118,6 +128,7 @@ Expected scrape output:
 
 ```text
 Scrape completed for site_a: fetched=5 valid=5 invalid=0 inserted=5 archived=6
+Scrape completed for site_b: fetched=5 valid=5 invalid=0 inserted=5 archived=1
 ```
 
 ## Configuration
@@ -156,7 +167,7 @@ pricemonitor show-config
 pricemonitor init-db
 ```
 
-### Run the real scraper
+### Run one scraper
 
 ```powershell
 pricemonitor scrape --source site_a
@@ -166,6 +177,18 @@ With a limit:
 
 ```powershell
 pricemonitor scrape --source site_a --limit 1
+```
+
+Run the second scraper:
+
+```powershell
+pricemonitor scrape --source site_b --limit 5
+```
+
+Run all enabled scrapers:
+
+```powershell
+pricemonitor scrape --source all --limit 2
 ```
 
 ## Makefile Shortcuts
@@ -268,7 +291,7 @@ pytest
 ```
 
 The smoke tests use a temporary SQLite database, so they stay fast and do not depend on Docker.
-They stub the Books to Scrape HTML responses, so tests stay deterministic and do not depend on network access.
+They stub both source HTML responses, so tests stay deterministic and do not depend on network access.
 Additional unit tests cover normalization helpers and validation rules directly.
 Repository tests cover scrape-run lifecycle helpers, snapshot insertion, and raw-page archive output.
 
@@ -289,8 +312,12 @@ Each source is defined under `configs/sources/`.
 
 `site_b`:
 
-- disabled
-- placeholder for a future source implementation
+- enabled
+- backed by the real `site_b` scraper
+- targets `https://webscraper.io/test-sites/e-commerce/static/computers/laptops`
+- reuses the same validation, repository, and raw-archive pipeline as `site_a`
+- extracts product name, category, price, URL, and image URL from a different card layout
+- archives the source listing HTML for each run
 
 ## Logging and Output
 
@@ -304,6 +331,7 @@ The current sprint stores scrape results in PostgreSQL only. Empty `data/raw`, `
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
 The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
 The CLI output and logs now report fetched, valid, invalid, inserted, and archived page counts for each scrape.
+When you use `--source all`, the CLI runs each enabled source in sequence and prints a final summary line after all of them complete.
 
 ## Common Issues
 
@@ -335,9 +363,9 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 ## Next Sprint Candidates
 
 - add processed filesystem outputs
-- add a second real source integration
 - export snapshots to CSV or Parquet
 - introduce Alembic migrations
+- add richer multi-source orchestration and retry behavior
 - expand repository and scraper query helpers further
 - improve failure handling and observability
 
