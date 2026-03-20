@@ -3,6 +3,7 @@ from __future__ import annotations
 """Smoke tests covering the CLI happy path with a temporary SQLite database."""
 
 import json
+from decimal import Decimal
 from pathlib import Path
 from textwrap import dedent
 
@@ -79,6 +80,34 @@ SITE_A_DETAIL_ONE_HTML = dedent(
         <table class="table table-striped">
           <tr><th>UPC</th><td>UPC-BOOK-1</td></tr>
           <tr><th>Price (incl. tax)</th><td>Ã‚Â£10.00</td></tr>
+          <tr><th>Availability</th><td>In stock (20 available)</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+)
+
+SITE_A_DETAIL_ONE_PRICE_CHANGED_HTML = dedent(
+    """\
+    <html>
+      <body>
+        <ul class="breadcrumb">
+          <li><a href="/">Home</a></li>
+          <li><a href="/catalogue/category/books_1/index.html">Books</a></li>
+          <li><a href="/catalogue/category/books/travel_2/index.html">Travel</a></li>
+          <li class="active">Test Book One</li>
+        </ul>
+        <div class="product_main">
+          <h1>  Test Book One  </h1>
+          <p class="price_color">&pound;12.50</p>
+          <p class="instock availability"> In stock (20 available) </p>
+        </div>
+        <div class="item active">
+          <img src="../../media/cache/test-book-one-large.jpg" alt="Test Book One">
+        </div>
+        <table class="table table-striped">
+          <tr><th>UPC</th><td>UPC-BOOK-1</td></tr>
+          <tr><th>Price (incl. tax)</th><td>&pound;12.50</td></tr>
           <tr><th>Availability</th><td>In stock (20 available)</td></tr>
         </table>
       </body>
@@ -249,9 +278,11 @@ def stub_fetchers(monkeypatch) -> None:
     monkeypatch.setattr(HttpFetcher, "fetch", fake_fetch)
     monkeypatch.setattr(BrowserFetcher, "fetch", fake_fetch)
 
+    return pages
+
 
 def test_init_db_and_scrape_site_a_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
-    """Verify schema creation and a single real-scraper flow end to end."""
+    """Verify schema creation and a single real-scraper flow end to end that produces no change events on a first run."""
 
     config_path = write_test_config(tmp_path)
     db_path = tmp_path / "test.db"
@@ -264,12 +295,13 @@ def test_init_db_and_scrape_site_a_smoke(tmp_path: Path, monkeypatch, capsys) ->
     assert main(["--config", str(config_path), "scrape", "--source", "site_a"]) == 0
     scrape_output = capsys.readouterr().out
 
-    assert "fetched=2 valid=1 invalid=1 inserted=1 archived=3" in scrape_output
+    assert "fetched=2 valid=1 invalid=1 inserted=1 archived=3 changes=0" in scrape_output
 
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     with engine.connect() as connection:
         scrape_runs_count = connection.execute(text("SELECT COUNT(*) FROM scrape_runs")).scalar_one()
         snapshots_count = connection.execute(text("SELECT COUNT(*) FROM product_snapshots")).scalar_one()
+        change_count = connection.execute(text("SELECT COUNT(*) FROM price_change_events")).scalar_one()
         latest_run = connection.execute(
             text(
                 """
@@ -293,6 +325,7 @@ def test_init_db_and_scrape_site_a_smoke(tmp_path: Path, monkeypatch, capsys) ->
 
     assert scrape_runs_count == 1
     assert snapshots_count == 1
+    assert change_count == 0
 
     assert latest_run["records_fetched"] == 2
     assert latest_run["records_inserted"] == 1
@@ -320,7 +353,7 @@ def test_init_db_and_scrape_site_a_smoke(tmp_path: Path, monkeypatch, capsys) ->
     assert manifest[1]["page_type"] == "detail"
 
 def test_scrape_site_b_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
-    """Verify the second source reuses the same validation and storage pipeline."""
+    """Verify the second source reuses the same validation, storage, and change pipeline."""
 
     config_path = write_test_config(tmp_path)
     db_path = tmp_path / "test.db"
@@ -332,7 +365,7 @@ def test_scrape_site_b_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
     assert main(["--config", str(config_path), "scrape", "--source", "site_b"]) == 0
     scrape_output = capsys.readouterr().out
 
-    assert "fetched=2 valid=2 invalid=0 inserted=2 archived=1" in scrape_output
+    assert "fetched=2 valid=2 invalid=0 inserted=2 archived=1 changes=0" in scrape_output
 
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     with engine.connect() as connection:
@@ -365,7 +398,7 @@ def test_scrape_site_b_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
 
 
 def test_scrape_all_sources_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
-    """Verify the CLI can run both static and browser-backed sources in sequence."""
+    """Verify the CLI can run both static and browser-backed sources in sequence with no prior baseline."""
 
     config_path = write_test_config(tmp_path)
     db_path = tmp_path / "test.db"
@@ -379,17 +412,65 @@ def test_scrape_all_sources_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
 
     assert "Scrape completed for site_a" in scrape_output
     assert "Scrape completed for site_b" in scrape_output
+    assert "changes=0" in scrape_output
     assert "All enabled scrapes completed successfully: site_a, site_b" in scrape_output
 
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     with engine.connect() as connection:
         scrape_runs_count = connection.execute(text("SELECT COUNT(*) FROM scrape_runs")).scalar_one()
         snapshots_count = connection.execute(text("SELECT COUNT(*) FROM product_snapshots")).scalar_one()
+        change_count = connection.execute(text("SELECT COUNT(*) FROM price_change_events")).scalar_one()
 
     assert scrape_runs_count == 2
     assert snapshots_count == 3
+    assert change_count == 0
    
-    
+def test_price_change_detection_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Verify a second run against the same source records a price-change event."""
+
+    config_path = write_test_config(tmp_path)
+    db_path = tmp_path / "test.db"
+    pages = stub_fetchers(monkeypatch)
+
+    assert main(["--config", str(config_path), "init-db"]) == 0
+    capsys.readouterr()
+
+    assert main(["--config", str(config_path), "scrape", "--source", "site_a"]) == 0
+    capsys.readouterr()
+
+    # Change the first product's price before the second run to simulate a real market change.
+    pages["https://books.toscrape.com/catalogue/test-book-one_1/index.html"] = (
+        SITE_A_DETAIL_ONE_PRICE_CHANGED_HTML
+    )
+
+    assert main(["--config", str(config_path), "scrape", "--source", "site_a"]) == 0
+    scrape_output = capsys.readouterr().out
+
+    assert "fetched=2 valid=1 invalid=1 inserted=1 archived=3 changes=1" in scrape_output
+
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    with engine.connect() as connection:
+        scrape_runs_count = connection.execute(text("SELECT COUNT(*) FROM scrape_runs")).scalar_one()
+        snapshots_count = connection.execute(text("SELECT COUNT(*) FROM product_snapshots")).scalar_one()
+        change_rows = connection.execute(
+            text(
+                """
+                SELECT external_id, previous_price, current_price, absolute_difference, percentage_difference
+                FROM price_change_events
+                ORDER BY id
+                """
+            )
+        ).mappings().all()
+
+    assert scrape_runs_count == 2
+    assert snapshots_count == 2
+    assert len(change_rows) == 1
+    assert change_rows[0]["external_id"] == "UPC-BOOK-1"
+    assert Decimal(str(change_rows[0]["previous_price"])) == Decimal("10.00")
+    assert Decimal(str(change_rows[0]["current_price"])) == Decimal("12.50")
+    assert Decimal(str(change_rows[0]["absolute_difference"])) == Decimal("2.50")
+    assert Decimal(str(change_rows[0]["percentage_difference"])) == Decimal("25.00")
+        
 def test_show_config_smoke(tmp_path: Path, capsys) -> None:
     """Verify that the CLI prints the resolved configuration, including browser settings."""
 

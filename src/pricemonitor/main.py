@@ -13,10 +13,12 @@ from sqlalchemy.exc import OperationalError
 from pricemonitor.config import AppSettings, SourceSettings, load_settings
 from pricemonitor.logging_config import configure_logging
 from pricemonitor.scrapers.registry import get_scraper
+from pricemonitor.services.change_detection import detect_price_changes
 from pricemonitor.storage.database import create_engine_from_url, create_session_factory, init_db
 from pricemonitor.storage.repositories import (
     ProductSnapshotRepository,
     RawPageArchiveRepository,
+    PriceChangeEventRepository,
     ScrapeRunRepository,
 )
 
@@ -81,6 +83,7 @@ def _run_single_source_scrape(
         with session_factory() as session:
             scrape_run_repo = ScrapeRunRepository(session)
             snapshot_repo = ProductSnapshotRepository(session)
+            change_event_repo = PriceChangeEventRepository(session)
             raw_archive_repo = RawPageArchiveRepository(settings.raw_dir)
 
             scrape_run = scrape_run_repo.create_scrape_run(source_name)
@@ -107,12 +110,33 @@ def _run_single_source_scrape(
                     pages=archived_pages,
                 )
 
+                scraped_at = datetime.now(timezone.utc)
                 inserted_count = snapshot_repo.insert_product_snapshots(
                     scrape_run_id=scrape_run.id,
                     source_name=source_name,
                     products=products,
-                    scraped_at=datetime.now(timezone.utc),
+                    scraped_at=scraped_at,
                 )
+
+                current_snapshots = snapshot_repo.list_for_scrape_run(scrape_run.id)
+                previous_run = scrape_run_repo.get_previous_successful_run(
+                    source_name=source_name,
+                    before_scrape_run_id=scrape_run.id,
+                )
+                previous_snapshots = (
+                    snapshot_repo.list_for_scrape_run(previous_run.id)
+                    if previous_run is not None
+                    else []
+                )
+
+                change_events = detect_price_changes(
+                    source_name=source_name,
+                    scrape_run_id=scrape_run.id,
+                    current_snapshots=current_snapshots,
+                    previous_snapshots=previous_snapshots,
+                    changed_at=scraped_at,
+                )
+                change_count = change_event_repo.insert_price_change_events(change_events)
 
                 scrape_run_repo.complete_scrape_run(
                     scrape_run.id,
@@ -124,7 +148,7 @@ def _run_single_source_scrape(
                 logger.info(
                     (
                         "Scrape completed for source=%s fetched=%s valid=%s "
-                        "invalid=%s inserted=%s archived=%s"
+                        "invalid=%s inserted=%s archived=%s changes=%s"
                     ),
                     source_name,
                     fetched_count,
@@ -132,12 +156,13 @@ def _run_single_source_scrape(
                     invalid_count,
                     inserted_count,
                     len(archived_files),
+                    change_count,
                 )
                 print(
                     f"Scrape completed for {source_name}: "
                     f"fetched={fetched_count} valid={valid_count} "
                     f"invalid={invalid_count} inserted={inserted_count} "
-                    f"archived={len(archived_files)}"
+                    f"archived={len(archived_files)} changes={change_count}"
                 )
             except Exception as exc:
                 session.rollback()
@@ -195,7 +220,7 @@ def handle_show_config(config_path: str) -> int:
 
 
 def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
-    """Run a scrape for a configured source or all enabled sources and persist its/theirs results."""
+    """Run a scrape for a configured source or all enabled sources and persist the results."""
 
     settings = load_settings(config_path)
     configure_logging(settings.log_level, settings.log_file)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""SQLAlchemy ORM models for scrape runs and product snapshots."""
+"""SQLAlchemy ORM models for scrape runs, product snapshots, and price change events."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -35,6 +35,11 @@ class ScrapeRun(Base):
         cascade="all, delete-orphan",
     )
 
+    price_change_events: Mapped[list["PriceChangeEvent"]] = relationship(
+        back_populates="scrape_run",
+        cascade="all, delete-orphan",
+    )
+
 
 class ProductSnapshot(Base):
     """Stores a point-in-time view of a product observed during a scrape."""
@@ -61,3 +66,37 @@ class ProductSnapshot(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
     scrape_run: Mapped[ScrapeRun] = relationship(back_populates="product_snapshots")
+
+class PriceChangeEvent(Base):
+    """Stores price changes detected between the current run and the previous successful run."""
+
+    __tablename__ = "price_change_events"
+    __table_args__ = (
+        Index("ix_price_change_event_lookup", "source_name", "external_id", "changed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    scrape_run_id: Mapped[int] = mapped_column(ForeignKey("scrape_runs.id"), index=True)
+    source_name: Mapped[str] = mapped_column(String(100), index=True)
+    external_id: Mapped[str] = mapped_column(String(255), index=True)
+    product_name: Mapped[str] = mapped_column(String(255))
+    currency: Mapped[str] = mapped_column(String(3))
+    previous_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("product_snapshots.id"),
+        index=True,
+    )
+    current_snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("product_snapshots.id"),
+        index=True,
+    )
+    previous_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    current_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    absolute_difference: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    percentage_difference: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    scrape_run: Mapped[ScrapeRun] = relationship(back_populates="price_change_events")

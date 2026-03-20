@@ -1,8 +1,8 @@
 # Price Monitor ETL
 
-`price-monitor-etl` is a Python ETL starter project for tracking e-commerce product prices.
+`price-monitor-etl` is a Python ETL starter project for monitoring e-commerce product prices over time.
 
-The first six sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, and browser automation support:
+The first seven sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, browser automation support, and price-change detection:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first six sprints deliver a working local foundation, two real scrapers, a n
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, and repository-based persistence helpers, while leaving processed exports and migrations for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, repository-based persistence helpers, and run-to-run price-change detection, while leaving processed exports and migrations for future sprints.
 
 ## Highlights
 
@@ -42,10 +42,13 @@ Implemented:
 - validation rules for missing names, missing URLs, and invalid prices
 - tracking of valid vs invalid scraped record counts
 - repository helpers for scrape-run lifecycle updates and snapshot insertion
+- repository helpers for previous-run lookup and price-change event insertion
 - raw HTML archive support under `data/raw/`
-- `scrape_runs` and `product_snapshots` tables
+- change detection between the current run and the previous successful run for the same source
+- absolute and percentage price-difference calculation
+- `scrape_runs`, `product_snapshots`, and `price_change_events` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests and unit tests covering scrape, normalization, validation, repository behavior, and config output
+- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, and config output
 
 Not implemented yet:
 
@@ -99,11 +102,13 @@ docker compose down -v
 docker compose up -d db
 ```
 
-### 5. Initialize the schema
+### 5. Initialize or update the schema
 
 ```powershell
 pricemonitor init-db
 ```
+
+If you are upgrading an existing local database, run this once after pulling Sprint 7 so the new `price_change_events` table is created.
 
 ### 6. Run a real scrape
 
@@ -137,9 +142,11 @@ pytest
 Expected scrape output:
 
 ```text
-Scrape completed for site_a: fetched=5 valid=5 invalid=0 inserted=5 archived=6
-Scrape completed for site_b: fetched=5 valid=5 invalid=0 inserted=5 archived=1
+Scrape completed for site_a: fetched=5 valid=5 invalid=0 inserted=5 archived=6 changes=0
+Scrape completed for site_b: fetched=5 valid=5 invalid=0 inserted=5 archived=1 changes=0
 ```
+
+On a later run, `changes` becomes non-zero only when a product price differs from the previous successful run for that same source.
 
 ## Configuration
 
@@ -240,6 +247,8 @@ price-monitor-etl/
 |       |-- services/
 |       `-- storage/
 |-- tests/
+|   |-- test_change_detection.py
+|   |-- test_fetcher_factory.py
 |   |-- test_smoke.py
 |   |-- test_storage_repositories.py
 |   `-- test_validation.py
@@ -272,6 +281,17 @@ Stores point-in-time product observations:
 - raw payload copy for traceability
 - parent scrape run id
 
+### `price_change_events`
+
+Stores detected price movements between consecutive successful runs for the same source:
+
+- source and external product id
+- previous and current snapshot ids
+- previous and current monitored prices
+- absolute and percentage difference
+- change timestamp
+- parent scrape run id
+
 ## Verifying the Database
 
 After a scrape, inspect the database with:
@@ -285,11 +305,17 @@ Then run:
 ```sql
 SELECT COUNT(*) FROM scrape_runs;
 SELECT COUNT(*) FROM product_snapshots;
+SELECT COUNT(*) FROM price_change_events;
 
 SELECT id, source_name, status, records_fetched, records_inserted
 FROM scrape_runs
 ORDER BY id DESC
 LIMIT 5;
+
+SELECT id, source_name, external_id, previous_price, current_price, absolute_difference, percentage_difference
+FROM price_change_events
+ORDER BY id DESC
+LIMIT 10;
 ```
 
 ## Testing
@@ -303,8 +329,9 @@ pytest
 The smoke tests use a temporary SQLite database, so they stay fast and do not depend on Docker.
 They stub both source HTML responses, so tests stay deterministic and do not depend on network access.
 Additional unit tests cover normalization helpers and validation rules directly.
-Repository tests cover scrape-run lifecycle helpers, snapshot insertion, and raw-page archive output.
+Repository tests cover scrape-run lifecycle helpers, snapshot insertion, raw-page archive output, and price-change event persistence.
 Fetcher tests cover HTTP vs browser fetcher selection.
+Change-detection tests cover changed-price, unchanged-price, and new-product scenarios directly.
 
 ## Source Configuration
 
@@ -320,6 +347,7 @@ Each source is defined under `configs/sources/`.
 - normalizes messy values before creating `ProductRecord` objects
 - rejects invalid records while continuing the scrape
 - archives fetched listing and detail HTML pages for each run
+- compares each successful run to the previous successful `site_a` run and records any price changes
 
 `site_b`:
 
@@ -330,6 +358,7 @@ Each source is defined under `configs/sources/`.
 - reuses the same validation, repository, and raw-archive pipeline as `site_a`
 - extracts product name, category, price, URL, and image URL from a different card layout
 - archives the source listing HTML for each run
+- participates in the same per-source change-detection flow as `site_a`
 
 ## Logging and Output
 
@@ -339,12 +368,14 @@ Logs are written to:
 logs/pricemonitor.log
 ```
 
-The current sprint stores scrape results in PostgreSQL only. Empty `data/raw`, `data/processed`, and `data/exports` directories are expected for now.
+Scrape metadata, snapshots, and detected price changes are persisted in PostgreSQL. `data/raw` is populated after scrapes, while `data/processed` and `data/exports` are still expected to remain empty for now.
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
 The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
-The CLI output and logs now report fetched, valid, invalid, inserted, and archived page counts for each scrape.
+The CLI output and logs now report fetched, valid, invalid, inserted, archived, and detected-change counts for each scrape.
 When you use `--source all`, the CLI runs each enabled source in sequence and prints a final summary line after all of them complete.
 Dynamic sources can switch from the HTTP fetcher to the browser fetcher through source configuration without changing the downstream storage or validation pipeline.
+The first successful run for a source creates the monitoring baseline, so `changes=0` is expected until a later run sees a different price.
+Change detection compares the current run to the previous successful run for the same source and records events in `price_change_events`.
 
 ## Common Issues
 
@@ -381,6 +412,7 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 - add richer multi-source orchestration and retry behavior
 - add browser-specific wait strategies and richer page interaction helpers
 - expand repository and scraper query helpers further
+- add notifications or alerting for detected price changes
 - improve failure handling and observability
 
 ## License

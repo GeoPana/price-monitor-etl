@@ -48,6 +48,33 @@ class ArchivedPageRecord(BaseModel):
     page_url: str
     content: str
 
+class PriceChangeEventCreate(BaseModel):
+    """Persistable price-change event detected between two consecutive runs."""
+
+    source_name: str
+    external_id: str
+    scrape_run_id: int
+    previous_snapshot_id: int
+    current_snapshot_id: int
+    product_name: str
+    currency: str = Field(min_length=3, max_length=3)
+    previous_price: Decimal
+    current_price: Decimal
+    absolute_difference: Decimal
+    percentage_difference: Decimal | None = None
+    changed_at: datetime
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("previous_price", "current_price", "absolute_difference", "percentage_difference")
+    @classmethod
+    def validate_non_negative(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("Change detection values cannot be negative.")
+        return value
 
 class ScrapeRunCreate(BaseModel):
     """Payload for creating a new scrape run record."""

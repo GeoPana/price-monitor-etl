@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Repository helpers that isolate database writes, lifecycle updates, and raw archives."""
+"""Repository helpers that isolate database writes, lifecycle updates, raw archives, and change events."""
 
 import json
 import re
@@ -11,8 +11,8 @@ from urllib.parse import urlsplit
 from sqlalchemy import Select, desc, select
 from sqlalchemy.orm import Session
 
-from pricemonitor.models.db_models import ProductSnapshot, ScrapeRun
-from pricemonitor.models.schemas import ArchivedPageRecord, ProductRecord
+from pricemonitor.models.db_models import ProductSnapshot, ScrapeRun, PriceChangeEvent
+from pricemonitor.models.schemas import ArchivedPageRecord, ProductRecord, PriceChangeEventCreate
 
 
 class ScrapeRunRepository:
@@ -77,7 +77,7 @@ class ScrapeRunRepository:
         """Fetch a scrape run or raise if it does not exist."""
 
         return self._require_run(scrape_run_id)
-
+    
     def list_recent(self, *, source_name: str | None = None, limit: int = 10) -> list[ScrapeRun]:
         """Return recent scrape runs, optionally filtered by source."""
 
@@ -87,11 +87,32 @@ class ScrapeRunRepository:
         statement = statement.limit(limit)
         return list(self.session.scalars(statement))
 
+    def get_previous_successful_run(
+        self,
+        *,
+        source_name: str,
+        before_scrape_run_id: int,
+    ) -> ScrapeRun | None:
+        """Return the latest successful run before the current one for the same source."""
+
+        statement: Select[tuple[ScrapeRun]] = (
+            select(ScrapeRun)
+            .where(
+                ScrapeRun.source_name == source_name,
+                ScrapeRun.status == "succeeded",
+                ScrapeRun.id < before_scrape_run_id,
+            )
+            .order_by(desc(ScrapeRun.id))
+            .limit(1)
+        )
+        return self.session.scalar(statement)
+
     def _require_run(self, scrape_run_id: int) -> ScrapeRun:
         scrape_run = self.session.get(ScrapeRun, scrape_run_id)
         if scrape_run is None:
             raise ValueError(f"Scrape run not found: {scrape_run_id}")
         return scrape_run
+
 
 class ProductSnapshotRepository:
     """Persistence operations for scraped product snapshots."""
@@ -160,6 +181,61 @@ class ProductSnapshotRepository:
             .limit(limit)
         )
         return list(self.session.scalars(statement))
+    
+    def list_for_scrape_run(self, scrape_run_id: int) -> list[ProductSnapshot]:
+        """Return all snapshots inserted for a specific scrape run."""
+
+        statement: Select[tuple[ProductSnapshot]] = (
+            select(ProductSnapshot)
+            .where(ProductSnapshot.scrape_run_id == scrape_run_id)
+            .order_by(ProductSnapshot.id)
+        )
+        return list(self.session.scalars(statement))
+
+
+class PriceChangeEventRepository:
+    """Persistence operations for detected price-change events."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def insert_price_change_events(self, events: list[PriceChangeEventCreate]) -> int:
+        """Insert the detected change events for a completed run."""
+
+        if not events:
+            return 0
+
+        rows = [
+            PriceChangeEvent(
+                scrape_run_id=event.scrape_run_id,
+                source_name=event.source_name,
+                external_id=event.external_id,
+                product_name=event.product_name,
+                currency=event.currency,
+                previous_snapshot_id=event.previous_snapshot_id,
+                current_snapshot_id=event.current_snapshot_id,
+                previous_price=event.previous_price,
+                current_price=event.current_price,
+                absolute_difference=event.absolute_difference,
+                percentage_difference=event.percentage_difference,
+                changed_at=event.changed_at,
+            )
+            for event in events
+        ]
+        self.session.add_all(rows)
+        self.session.flush()
+        return len(rows)
+
+    def list_latest_for_source(self, source_name: str) -> list[PriceChangeEvent]:
+        """Return recent change events for a source ordered from newest to oldest."""
+
+        statement: Select[tuple[PriceChangeEvent]] = (
+            select(PriceChangeEvent)
+            .where(PriceChangeEvent.source_name == source_name)
+            .order_by(desc(PriceChangeEvent.changed_at), desc(PriceChangeEvent.id))
+        )
+        return list(self.session.scalars(statement))
+
 
 class RawPageArchiveRepository:
     """Filesystem archive support for raw fetched pages."""
