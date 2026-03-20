@@ -10,6 +10,12 @@ class Base(DeclarativeBase):
     pass
 
 
+def load_model_metadata() -> None:
+    """Import ORM modules so Base.metadata is fully populated."""
+
+    import pricemonitor.models.db_models  # noqa: F401
+
+
 def create_engine_from_url(database_url: str, echo: bool = False) -> Engine:
     """Create an engine with backend-specific connection options."""
 
@@ -32,9 +38,15 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, class_=Session)
 
 
-def init_db(engine: Engine) -> None:
-    """Import models and create all mapped tables."""
+def create_test_schema(engine: Engine) -> None:
+    """Test-only helper that creates tables directly from ORM metadata."""
 
-    from pricemonitor.models import db_models  # noqa: F401
-
+    load_model_metadata()
     Base.metadata.create_all(engine)
+
+
+def init_db(engine: Engine) -> None:
+    """Import models and create all mapped tables.
+    Backward-compatible alias kept only for isolated tests and local utilities."""
+
+    create_test_schema(engine)

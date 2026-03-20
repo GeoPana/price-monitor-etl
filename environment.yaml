@@ -14,5 +14,6 @@ dependencies:
   - requests>=2.31,<3.0
   - python-dotenv>=1.0,<2.0
   - playwright>=1.52,<2.0,
+  - alembic>=1.18,<1.19,
   # Test dependency included here for a ready-to-run local dev environment.
   - pytest>=8.0,<9.0

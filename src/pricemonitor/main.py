@@ -14,7 +14,8 @@ from pricemonitor.config import AppSettings, SourceSettings, load_settings
 from pricemonitor.logging_config import configure_logging
 from pricemonitor.scrapers.registry import get_scraper
 from pricemonitor.services.change_detection import detect_price_changes
-from pricemonitor.storage.database import create_engine_from_url, create_session_factory, init_db
+from pricemonitor.storage.database import create_engine_from_url, create_session_factory
+from pricemonitor.storage.migrations import upgrade_to_head
 from pricemonitor.storage.repositories import (
     ProductSnapshotRepository,
     RawPageArchiveRepository,
@@ -189,25 +190,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("init-db", help="Create database tables.")
+    subparsers.add_parser("init-db", help="Apply Alembic migrations up to head.")
     subparsers.add_parser("show-config", help="Print resolved application configuration.")
 
-    scrape_parser = subparsers.add_parser("scrape", help="Run a scrape for a specific source.")
+    scrape_parser = subparsers.add_parser("scrape", help="Run a scrape for a configured source or all enabled sources.")
     scrape_parser.add_argument("--source", required=True, help="Source name, e.g. site_a")
     scrape_parser.add_argument("--limit", type=int, default=None, help="Optional record limit")
 
     return parser
 
 
-def handle_init_db(database_url: str) -> int:
-    """Initialize the configured database schema."""
+def handle_init_db(config_path: str) -> int:
+    """Apply Alembic migrations to the configured database."""
 
+    settings = load_settings(config_path)
     try:
-        engine = create_engine_from_url(database_url)
-        init_db(engine)
+        upgrade_to_head(config_path)
     except OperationalError as exc:
-        raise SystemExit(_format_db_operational_error(exc, database_url)) from exc
-    print("Database initialized.")
+        raise SystemExit(_format_db_operational_error(exc, settings.database_url)) from exc
+    print("Database schema is up to date.")
     return 0
 
 
@@ -257,7 +258,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "init-db":
         settings = load_settings(args.config)
         configure_logging(settings.log_level, settings.log_file)
-        return handle_init_db(settings.database_url)
+        return handle_init_db(args.config)
 
     if args.command == "show-config":
         return handle_show_config(args.config)
