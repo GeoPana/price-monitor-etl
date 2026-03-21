@@ -413,7 +413,7 @@ def test_scrape_all_sources_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
     assert "Scrape completed for site_a" in scrape_output
     assert "Scrape completed for site_b" in scrape_output
     assert "changes=0" in scrape_output
-    assert "All enabled scrapes completed successfully: site_a, site_b" in scrape_output
+    assert "All enabled scrape pipelines completed successfully: site_a, site_b" in scrape_output
 
     engine = create_engine(f"sqlite:///{db_path.as_posix()}")
     with engine.connect() as connection:

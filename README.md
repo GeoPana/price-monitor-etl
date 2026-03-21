@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for monitoring e-commerce product prices over time.
 
-The first nine sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, browser automation support, price-change detection, Alembic-based schema migrations, and business-facing exports:
+The first ten sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, browser automation support, price-change detection, Alembic-based schema migrations, business-facing exports, and pipeline-style orchestration:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first nine sprints deliver a working local foundation, two real scrapers, a 
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, repository-based persistence helpers, run-to-run price-change detection, an Alembic migration workflow, and client-friendly CSV/JSON reporting outputs, while leaving processed transforms and richer orchestration for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, repository-based persistence helpers, run-to-run price-change detection, an Alembic migration workflow, client-friendly CSV/JSON reporting outputs, and a clean end-to-end pipeline runner, while leaving processed transforms and richer orchestration for future sprints.
 
 ## Highlights
 
@@ -51,10 +51,13 @@ Implemented:
 - a committed baseline revision for the current schema
 - `pricemonitor init-db` applying Alembic migrations instead of relying on `create_all()`
 - `pricemonitor export --source <name>` for business-facing CSV and JSON outputs
+- `pricemonitor run --source <name>` for end-to-end scrape + export execution
+- dedicated pipeline modules under `src/pricemonitor/pipelines/`
+- clearer multi-source orchestration and per-source pipeline lifecycle handling
 - latest catalog, price change, and run summary exports under `data/exports/`
 - `scrape_runs`, `product_snapshots`, and `price_change_events` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, exports, and config output
+- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, exports, pipeline orchestration, and config output
 
 Not implemented yet:
 
@@ -145,7 +148,19 @@ Or export all enabled sources:
 pricemonitor export --source all --limit 50
 ```
 
-### 8. Run tests
+### 8. Run the full end-to-end pipeline
+
+```powershell
+pricemonitor run --source site_a --limit 5 --report-limit 50
+```
+
+Or run the full pipeline for all enabled sources:
+
+```powershell
+pricemonitor run --source all --limit 2 --report-limit 25
+```
+
+### 9. Run tests
 
 ```powershell
 pytest
@@ -160,6 +175,7 @@ pricemonitor scrape --source site_a --limit 5
 pricemonitor scrape --source site_b --limit 5
 pricemonitor scrape --source all --limit 2
 pricemonitor export --source all --limit 50
+pricemonitor run --source all --limit 2 --report-limit 25
 pytest
 ```
 
@@ -177,6 +193,14 @@ Expected export output:
 ```text
 Export completed for site_a: latest_products=5 price_changes=2 run_summary=6 dir=...\data\exports\site_a
 Export completed for site_b: latest_products=6 price_changes=0 run_summary=4 dir=...\data\exports\site_b
+```
+
+Expected pipeline output:
+
+```text
+Scrape completed for site_a: fetched=2 valid=2 invalid=0 inserted=2 archived=3 changes=0
+Export completed for site_a: latest_products=2 price_changes=0 run_summary=3 dir=...\data\exports\site_a
+Pipeline run completed for site_a.
 ```
 
 ## Configuration
@@ -257,6 +281,18 @@ Export all enabled sources:
 pricemonitor export --source all --limit 50
 ```
 
+### Run the full pipeline for one source
+
+```powershell
+pricemonitor run --source site_a --limit 5 --report-limit 50
+```
+
+### Run the full pipeline for all enabled sources
+
+```powershell
+pricemonitor run --source all --limit 2 --report-limit 25
+```
+
 ## Makefile Shortcuts
 
 ```powershell
@@ -266,6 +302,7 @@ make show-config
 make init-db
 make scrape
 make export
+make run
 make test
 make migrate
 make revision message="add new column"
@@ -326,6 +363,31 @@ Important:
 - export files are overwritten on each run so they always reflect the latest stored state
 - `--limit` applies to `price_changes` and `run_summary`; `latest_products` always exports the full current catalog for that source
 
+## Pipeline Flow
+
+Sprint 10 adds a clearer orchestration layer under `src/pricemonitor/pipelines/`.
+
+Pipeline modules:
+
+- `common.py` contains shared helpers such as source resolution and DB error formatting
+- `scrape_run.py` owns the scrape pipeline for one source or many sources
+- `report_run.py` owns the reporting/export pipeline for one source or many sources
+
+The new `run` command composes both pipeline stages:
+
+1. scrape the source
+2. persist snapshots and change events
+3. export business-facing reports
+
+This makes the project feel like a real pipeline rather than a set of unrelated commands.
+
+Important behavior:
+
+- each source is handled independently inside multi-source orchestration
+- failures are isolated per source during `--source all`
+- a failure in one source does not prevent other enabled sources from being attempted
+- the end-to-end `run` command performs scrape first, then export, for each source in sequence
+
 ## Project Structure
 
 ```text
@@ -354,6 +416,7 @@ price-monitor-etl/
 |       |-- fetchers/
 |       |-- models/
 |       |-- parsers/
+|       |-- pipelines/
 |       |-- scrapers/
 |       |-- services/
 |       |   `-- export.py
@@ -362,6 +425,7 @@ price-monitor-etl/
 |   |-- test_change_detection.py
 |   |-- test_export.py
 |   |-- test_fetcher_factory.py
+|   |-- test_pipeline.py
 |   |-- test_smoke.py
 |   |-- test_storage_repositories.py
 |   `-- test_validation.py
@@ -447,6 +511,7 @@ Repository tests cover scrape-run lifecycle helpers, snapshot insertion, raw-pag
 Fetcher tests cover HTTP vs browser fetcher selection.
 Change-detection tests cover changed-price, unchanged-price, and new-product scenarios directly.
 Export tests cover CSV/JSON generation and the export CLI flow directly.
+Pipeline tests cover end-to-end orchestration across multiple sources.
 Alembic becomes the normal migration path, while direct metadata-based schema creation stays limited to isolated test setup.
 
 ## Source Configuration
@@ -488,8 +553,9 @@ Scrape metadata, snapshots, and detected price changes are persisted in PostgreS
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
 The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
 The CLI output and logs now report fetched, valid, invalid, inserted, archived, and detected-change counts for each scrape.
-When you use `--source all`, the CLI runs each enabled source in sequence and prints a final summary line after all of them complete.
+When you use `--source all`, the pipeline orchestration runs each enabled source in sequence and prints a final summary line after all of them complete.
 The export command writes both CSV and JSON outputs for each source and prints row counts for `latest_products`, `price_changes`, and `run_summary`.
+The `run` command combines scrape and export into a single end-to-end pipeline flow.
 Dynamic sources can switch from the HTTP fetcher to the browser fetcher through source configuration without changing the downstream storage or validation pipeline.
 The first successful run for a source creates the monitoring baseline, so `changes=0` is expected until a later run sees a different price.
 Change detection compares the current run to the previous successful run for the same source and records events in `price_change_events`.
@@ -548,6 +614,20 @@ data/exports/site_a/price_changes.csv
 data/exports/site_a/run_summary.csv
 ```
 
+## Common Pipeline Cases
+
+### Run scrape and export for one source
+
+```powershell
+pricemonitor run --source site_a --limit 5 --report-limit 50
+```
+
+### Run scrape and export for all enabled sources
+
+```powershell
+pricemonitor run --source all --limit 2 --report-limit 25
+```
+
 ## Common Issues
 
 ### PostgreSQL authentication failure
@@ -579,7 +659,7 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 
 - add processed filesystem outputs
 - add richer report formats such as Parquet or Excel
-- add richer multi-source orchestration and retry behavior
+- add retries, scheduling, and background execution
 - add browser-specific wait strategies and richer page interaction helpers
 - expand repository and scraper query helpers further
 - add notifications or alerting for detected price changes
