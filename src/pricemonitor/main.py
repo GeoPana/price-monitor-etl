@@ -14,6 +14,7 @@ from pricemonitor.config import AppSettings, SourceSettings, load_settings
 from pricemonitor.logging_config import configure_logging
 from pricemonitor.scrapers.registry import get_scraper
 from pricemonitor.services.change_detection import detect_price_changes
+from pricemonitor.services.export import ExportService
 from pricemonitor.storage.database import create_engine_from_url, create_session_factory
 from pricemonitor.storage.migrations import upgrade_to_head
 from pricemonitor.storage.repositories import (
@@ -46,6 +47,7 @@ def _format_db_operational_error(exc: OperationalError, database_url: str) -> st
         f"Resolved URL: {database_url}\n"
         f"Original error: {exc}"
     )
+
 
 def _resolve_target_sources(settings: AppSettings, source_name: str) -> list[str]:
     """Resolve a single source or the set of all enabled sources."""
@@ -176,6 +178,50 @@ def _run_single_source_scrape(
                 raise
     except OperationalError as exc:
         raise SystemExit(_format_db_operational_error(exc, settings.database_url)) from exc
+
+
+def _run_single_source_export(
+    *,
+    settings: AppSettings,
+    source_name: str,
+    limit: int,
+) -> None:
+    """Build CSV and JSON exports for one source from already-stored database data."""
+
+    try:
+        engine = create_engine_from_url(settings.database_url)
+        session_factory = create_session_factory(engine)
+
+        with session_factory() as session:
+            export_service = ExportService(
+                exports_dir=settings.exports_dir,
+                scrape_run_repo=ScrapeRunRepository(session),
+                snapshot_repo=ProductSnapshotRepository(session),
+                change_event_repo=PriceChangeEventRepository(session),
+            )
+            report = export_service.export_source_report(source_name, recent_limit=limit)
+            counts = report.counts()
+
+            logger.info(
+                (
+                    "Export completed for source=%s latest_products=%s "
+                    "price_changes=%s run_summary=%s dir=%s"
+                ),
+                source_name,
+                counts["latest_products"],
+                counts["price_changes"],
+                counts["run_summary"],
+                report.export_dir,
+            )
+            print(
+                f"Export completed for {source_name}: "
+                f"latest_products={counts['latest_products']} "
+                f"price_changes={counts['price_changes']} "
+                f"run_summary={counts['run_summary']} "
+                f"dir={report.export_dir}"
+            )
+    except OperationalError as exc:
+        raise SystemExit(_format_db_operational_error(exc, settings.database_url)) from exc
     
 
 def build_parser() -> argparse.ArgumentParser:
@@ -196,6 +242,18 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_parser = subparsers.add_parser("scrape", help="Run a scrape for a configured source or all enabled sources.")
     scrape_parser.add_argument("--source", required=True, help="Source name, e.g. site_a")
     scrape_parser.add_argument("--limit", type=int, default=None, help="Optional record limit")
+
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Write business-facing CSV and JSON exports for a source or all enabled sources.",
+    )
+    export_parser.add_argument("--source", required=True, help="Source name, e.g. site_a, or all")
+    export_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Max rows for price change and run summary exports.",
+    )
 
     return parser
 
@@ -249,6 +307,34 @@ def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
     return exit_code
 
 
+def handle_export(config_path: str, source_name: str, limit: int) -> int:
+    """Generate business-facing CSV and JSON exports for one source or all enabled sources."""
+
+    settings = load_settings(config_path)
+    configure_logging(settings.log_level, settings.log_file)
+
+    target_sources = _resolve_target_sources(settings, source_name)
+    exit_code = 0
+
+    for resolved_source_name in target_sources:
+        try:
+            _run_single_source_export(
+                settings=settings,
+                source_name=resolved_source_name,
+                limit=limit,
+            )
+        except Exception:
+            exit_code = 1
+            if source_name != "all":
+                raise
+            logger.exception("Export failed for source=%s during all-source run", resolved_source_name)
+
+    if source_name == "all" and exit_code == 0:
+        print(f"All enabled exports completed successfully: {', '.join(target_sources)}")
+
+    return exit_code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch CLI subcommands."""
 
@@ -265,6 +351,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "scrape":
         return handle_scrape(args.config, args.source, args.limit)
+    
+    if args.command == "export":
+        return handle_export(args.config, args.source, args.limit)
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

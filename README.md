@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for monitoring e-commerce product prices over time.
 
-The first eight sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, browser automation support, price-change detection, and Alembic-based schema migrations:
+The first nine sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, browser automation support, price-change detection, Alembic-based schema migrations, and business-facing exports:
 
 - configurable settings via YAML and environment variables
 - a CLI for database setup, config inspection, and scraping
@@ -10,7 +10,7 @@ The first eight sprints deliver a working local foundation, two real scrapers, a
 - Docker Compose for local database setup
 - smoke tests using SQLite
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, repository-based persistence helpers, run-to-run price-change detection, and an Alembic migration workflow, while leaving processed exports and richer orchestration for future sprints.
+The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, repository-based persistence helpers, run-to-run price-change detection, an Alembic migration workflow, and client-friendly CSV/JSON reporting outputs, while leaving processed transforms and richer orchestration for future sprints.
 
 ## Highlights
 
@@ -50,13 +50,15 @@ Implemented:
 - Alembic migration environment wired to the app's config and SQLAlchemy metadata
 - a committed baseline revision for the current schema
 - `pricemonitor init-db` applying Alembic migrations instead of relying on `create_all()`
+- `pricemonitor export --source <name>` for business-facing CSV and JSON outputs
+- latest catalog, price change, and run summary exports under `data/exports/`
 - `scrape_runs`, `product_snapshots`, and `price_change_events` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, and config output
+- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, exports, and config output
 
 Not implemented yet:
 
-- writes to `data/processed` or `data/exports`
+- writes to `data/processed`
 - scheduling, retries, or orchestration
 
 ## Quickstart
@@ -131,7 +133,19 @@ Or run both enabled sources:
 pricemonitor scrape --source all --limit 2
 ```
 
-### 7. Run tests
+### 7. Generate business-facing exports
+
+```powershell
+pricemonitor export --source site_a
+```
+
+Or export all enabled sources:
+
+```powershell
+pricemonitor export --source all --limit 50
+```
+
+### 8. Run tests
 
 ```powershell
 pytest
@@ -145,6 +159,7 @@ pricemonitor init-db
 pricemonitor scrape --source site_a --limit 5
 pricemonitor scrape --source site_b --limit 5
 pricemonitor scrape --source all --limit 2
+pricemonitor export --source all --limit 50
 pytest
 ```
 
@@ -156,6 +171,13 @@ Scrape completed for site_b: fetched=5 valid=5 invalid=0 inserted=5 archived=1 c
 ```
 
 On a later run, `changes` becomes non-zero only when a product price differs from the previous successful run for that same source.
+
+Expected export output:
+
+```text
+Export completed for site_a: latest_products=5 price_changes=2 run_summary=6 dir=...\data\exports\site_a
+Export completed for site_b: latest_products=6 price_changes=0 run_summary=4 dir=...\data\exports\site_b
+```
 
 ## Configuration
 
@@ -217,6 +239,24 @@ Run all enabled scrapers:
 pricemonitor scrape --source all --limit 2
 ```
 
+### Export one source
+
+```powershell
+pricemonitor export --source site_a
+```
+
+Limit recent rows included in `price_changes` and `run_summary`:
+
+```powershell
+pricemonitor export --source site_a --limit 25
+```
+
+Export all enabled sources:
+
+```powershell
+pricemonitor export --source all --limit 50
+```
+
 ## Makefile Shortcuts
 
 ```powershell
@@ -225,6 +265,7 @@ make install-dev
 make show-config
 make init-db
 make scrape
+make export
 make test
 make migrate
 make revision message="add new column"
@@ -260,6 +301,31 @@ Existing pre-Alembic databases:
 - if the database was already created before Sprint 8 and already matches the current schema, use `make stamp-head` once
 - after that, use normal Alembic revisions and upgrades
 
+## Exports And Reporting
+
+Sprint 9 adds a reporting pipeline that reads existing database state and writes client-friendly files under `data/exports/<source>/`.
+
+Each export run regenerates:
+
+- `latest_products.csv`
+- `latest_products.json`
+- `price_changes.csv`
+- `price_changes.json`
+- `run_summary.csv`
+- `run_summary.json`
+
+Dataset meaning:
+
+- `latest_products` contains the latest known snapshot for each product in a source
+- `price_changes` contains recent detected price changes in reverse chronological order
+- `run_summary` contains recent scrape outcomes, counts, durations, and errors
+
+Important:
+
+- `export` reads from the database only; it does not scrape new data
+- export files are overwritten on each run so they always reflect the latest stored state
+- `--limit` applies to `price_changes` and `run_summary`; `latest_products` always exports the full current catalog for that source
+
 ## Project Structure
 
 ```text
@@ -290,9 +356,11 @@ price-monitor-etl/
 |       |-- parsers/
 |       |-- scrapers/
 |       |-- services/
+|       |   `-- export.py
 |       `-- storage/
 |-- tests/
 |   |-- test_change_detection.py
+|   |-- test_export.py
 |   |-- test_fetcher_factory.py
 |   |-- test_smoke.py
 |   |-- test_storage_repositories.py
@@ -378,6 +446,7 @@ Additional unit tests cover normalization helpers and validation rules directly.
 Repository tests cover scrape-run lifecycle helpers, snapshot insertion, raw-page archive output, and price-change event persistence.
 Fetcher tests cover HTTP vs browser fetcher selection.
 Change-detection tests cover changed-price, unchanged-price, and new-product scenarios directly.
+Export tests cover CSV/JSON generation and the export CLI flow directly.
 Alembic becomes the normal migration path, while direct metadata-based schema creation stays limited to isolated test setup.
 
 ## Source Configuration
@@ -415,11 +484,12 @@ Logs are written to:
 logs/pricemonitor.log
 ```
 
-Scrape metadata, snapshots, and detected price changes are persisted in PostgreSQL. `data/raw` is populated after scrapes, while `data/processed` and `data/exports` are still expected to remain empty for now.
+Scrape metadata, snapshots, and detected price changes are persisted in PostgreSQL. `data/raw` is populated after scrapes, `data/exports` is populated after export runs, and `data/processed` is still expected to remain empty for now.
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
 The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
 The CLI output and logs now report fetched, valid, invalid, inserted, archived, and detected-change counts for each scrape.
 When you use `--source all`, the CLI runs each enabled source in sequence and prints a final summary line after all of them complete.
+The export command writes both CSV and JSON outputs for each source and prints row counts for `latest_products`, `price_changes`, and `run_summary`.
 Dynamic sources can switch from the HTTP fetcher to the browser fetcher through source configuration without changing the downstream storage or validation pipeline.
 The first successful run for a source creates the monitoring baseline, so `changes=0` is expected until a later run sees a different price.
 Change detection compares the current run to the previous successful run for the same source and records events in `price_change_events`.
@@ -456,6 +526,28 @@ make migrate
 
 Always review autogenerated migrations before committing them.
 
+## Common Export Cases
+
+### Export one source
+
+```powershell
+pricemonitor export --source site_a
+```
+
+### Export all enabled sources
+
+```powershell
+pricemonitor export --source all --limit 50
+```
+
+### Check generated files
+
+```text
+data/exports/site_a/latest_products.csv
+data/exports/site_a/price_changes.csv
+data/exports/site_a/run_summary.csv
+```
+
 ## Common Issues
 
 ### PostgreSQL authentication failure
@@ -486,7 +578,7 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 ## Next Sprint Candidates
 
 - add processed filesystem outputs
-- export snapshots to CSV or Parquet
+- add richer report formats such as Parquet or Excel
 - add richer multi-source orchestration and retry behavior
 - add browser-specific wait strategies and richer page interaction helpers
 - expand repository and scraper query helpers further

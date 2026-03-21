@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from sqlalchemy import Select, desc, select
+from sqlalchemy import Select, desc, select, func
 from sqlalchemy.orm import Session
 
 from pricemonitor.models.db_models import ProductSnapshot, ScrapeRun, PriceChangeEvent
@@ -191,6 +191,24 @@ class ProductSnapshotRepository:
             .order_by(ProductSnapshot.id)
         )
         return list(self.session.scalars(statement))
+    
+    def list_current_catalog_for_source(self, source_name: str) -> list[ProductSnapshot]:
+        """Return the latest stored snapshot for each product within a source."""
+
+        latest_snapshot_ids = (
+            select(func.max(ProductSnapshot.id).label("latest_id"))
+            .where(ProductSnapshot.source_name == source_name)
+            .group_by(ProductSnapshot.external_id)
+            .subquery()
+        )
+
+        statement: Select[tuple[ProductSnapshot]] = (
+            select(ProductSnapshot)
+            .join(latest_snapshot_ids, ProductSnapshot.id == latest_snapshot_ids.c.latest_id)
+            .order_by(ProductSnapshot.product_name, ProductSnapshot.external_id)
+        )
+        return list(self.session.scalars(statement))
+
 
 
 class PriceChangeEventRepository:
@@ -226,13 +244,19 @@ class PriceChangeEventRepository:
         self.session.flush()
         return len(rows)
 
-    def list_latest_for_source(self, source_name: str) -> list[PriceChangeEvent]:
+    def list_latest_for_source(
+        self,
+        source_name: str,
+        *,
+        limit: int = 100,
+    ) -> list[PriceChangeEvent]:
         """Return recent change events for a source ordered from newest to oldest."""
 
         statement: Select[tuple[PriceChangeEvent]] = (
             select(PriceChangeEvent)
             .where(PriceChangeEvent.source_name == source_name)
             .order_by(desc(PriceChangeEvent.changed_at), desc(PriceChangeEvent.id))
+            .limit(limit)
         )
         return list(self.session.scalars(statement))
 
