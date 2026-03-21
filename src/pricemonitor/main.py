@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-"""CLI entry points for database setup, configuration inspection, and scraping."""
+"""CLI entry points for migrations, inspection, and pipeline orchestration."""
 
 import argparse
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Sequence
 
 from sqlalchemy.exc import OperationalError
 
-from pricemonitor.config import AppSettings, SourceSettings, load_settings
+from pricemonitor.config import load_settings
 from pricemonitor.logging_config import configure_logging
 from pricemonitor.pipelines.common import format_db_operational_error, resolve_target_sources
+from pricemonitor.pipelines.process_run import run_process_for_source, run_process_pipeline
 from pricemonitor.pipelines.report_run import run_report_for_source, run_report_pipeline
 from pricemonitor.pipelines.scrape_run import run_scrape_for_source, run_scrape_pipeline
 from pricemonitor.storage.migrations import upgrade_to_head
@@ -35,25 +35,37 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init-db", help="Apply Alembic migrations up to head.")
     subparsers.add_parser("show-config", help="Print resolved application configuration.")
 
-    scrape_parser = subparsers.add_parser("scrape", help="Run a scrape for a configured source or all enabled sources.")
+    scrape_parser = subparsers.add_parser("scrape", help="Run the scrape pipeline for a configured source or all enabled sources.")
     scrape_parser.add_argument("--source", required=True, help="Source name, e.g. site_a")
-    scrape_parser.add_argument("--limit", type=int, default=None, help="Optional record limit")
+    scrape_parser.add_argument("--limit", type=int, default=None, help="Optional scrape record limit")
+
+    process_parser = subparsers.add_parser(
+        "process",
+        help="Build processed analytics-ready datasets for one source or all enabled sources.",
+    )
+    process_parser.add_argument("--source", required=True, help="Source name, e.g. site_a, or all")
+    process_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Max rows for processed price-change and run-summary datasets.",
+    )
 
     export_parser = subparsers.add_parser(
         "export",
-        help="Write business-facing CSV and JSON exports for a source or all enabled sources.",
+        help="Build business-facing exports from processed datasets for one source or all enabled sources.",
     )
     export_parser.add_argument("--source", required=True, help="Source name, e.g. site_a, or all")
     export_parser.add_argument(
         "--limit",
         type=int,
         default=50,
-        help="Max rows for price change and run summary exports.",
+        help="Max rows for exported price-change and run summary exports.",
     )
 
     run_parser = subparsers.add_parser(
         "run",
-        help="Run the full end-to-end pipeline: scrape first, then export reports.",
+        help="Run the full end-to-end pipeline: scrape, process, then export.",
     )
     run_parser.add_argument("--source", required=True, help="Source name, e.g. site_a, or all")
     run_parser.add_argument("--limit", type=int, default=None, help="Optional scrape record limit")
@@ -61,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--report-limit",
         type=int,
         default=50,
-        help="Max rows for price change and run summary exports.",
+        help="Max rows for processed and exported price-change/run-summary datasets.",
     )
 
     return parser
@@ -88,10 +100,14 @@ def handle_show_config(config_path: str) -> int:
 
 
 def handle_scrape(config_path: str, source_name: str, limit: int | None) -> int:
-    """Run a scrape for a configured source or all enabled sources and persist the results."""
+    """Dispatch to the scrape pipeline module."""
 
     return run_scrape_pipeline(config_path, source_name, limit)
 
+def handle_process(config_path: str, source_name: str, limit: int) -> int:
+    """Dispatch to the process pipeline module."""
+
+    return run_process_pipeline(config_path, source_name, limit)
 
 def handle_export(config_path: str, source_name: str, limit: int) -> int:
     """Dispatch to the reporting/export pipeline module."""
@@ -121,6 +137,11 @@ def handle_run(
                 source_name=resolved_source_name,
                 source_settings=settings.sources[resolved_source_name],
                 limit=limit,
+            )
+            run_process_for_source(
+                settings=settings,
+                source_name=resolved_source_name,
+                limit=report_limit,
             )
             run_report_for_source(
                 settings=settings,
@@ -167,6 +188,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "scrape":
         return handle_scrape(args.config, args.source, args.limit)
+    
+    if args.command == "process":
+        return handle_process(args.config, args.source, args.limit)
     
     if args.command == "export":
         return handle_export(args.config, args.source, args.limit)

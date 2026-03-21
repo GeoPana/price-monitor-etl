@@ -1,23 +1,15 @@
 from __future__ import annotations
 
-"""Build business-facing CSV and JSON exports from stored scrape data."""
+"""Build business-facing exports from the processed data layer, not directly from the DB."""
 
 import csv
 import json
 from dataclasses import dataclass
-from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from pricemonitor.models.db_models import PriceChangeEvent, ProductSnapshot, ScrapeRun
-from pricemonitor.storage.repositories import (
-    PriceChangeEventRepository,
-    ProductSnapshotRepository,
-    ScrapeRunRepository,
-)
 
-LATEST_PRODUCTS_FIELDS = [
+LATEST_PRODUCTS_EXPORT_FIELDS = [
     "source_name",
     "external_id",
     "product_name",
@@ -26,15 +18,16 @@ LATEST_PRODUCTS_FIELDS = [
     "product_url",
     "image_url",
     "currency",
+    "is_discounted",
     "listed_price",
     "sale_price",
     "effective_price",
     "availability",
+    "availability_group",
     "scraped_at",
-    "scrape_run_id",
 ]
 
-PRICE_CHANGES_FIELDS = [
+PRICE_CHANGES_EXPORT_FIELDS = [
     "source_name",
     "external_id",
     "product_name",
@@ -43,19 +36,24 @@ PRICE_CHANGES_FIELDS = [
     "current_price",
     "absolute_difference",
     "percentage_difference",
+    "change_direction",
+    "change_bucket",
+    "change_magnitude",
     "changed_at",
-    "scrape_run_id",
 ]
 
-RUN_SUMMARY_FIELDS = [
+RUN_SUMMARY_EXPORT_FIELDS = [
     "scrape_run_id",
     "source_name",
     "status",
+    "success_flag",
     "started_at",
     "finished_at",
     "duration_seconds",
     "records_fetched",
     "records_inserted",
+    "insert_rate",
+    "validity_rate",
     "error_message",
 ]
 
@@ -83,20 +81,11 @@ class ExportReport:
 
 
 class ExportService:
-    """Create client-facing exports from stored scrape and change-detection data."""
+    """Create client-facing outputs from the curated processed datasets."""
 
-    def __init__(
-        self,
-        *,
-        exports_dir: Path,
-        scrape_run_repo: ScrapeRunRepository,
-        snapshot_repo: ProductSnapshotRepository,
-        change_event_repo: PriceChangeEventRepository,
-    ) -> None:
+    def __init__(self, *, processed_dir: Path, exports_dir: Path) -> None:
+        self.processed_dir = Path(processed_dir)
         self.exports_dir = Path(exports_dir)
-        self.scrape_run_repo = scrape_run_repo
-        self.snapshot_repo = snapshot_repo
-        self.change_event_repo = change_event_repo
 
     def export_source_report(self, source_name: str, *, recent_limit: int = 50) -> ExportReport:
         """Write all business-facing exports for a single source."""
@@ -104,27 +93,36 @@ class ExportService:
         export_dir = self.exports_dir / source_name
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        latest_products_rows = self._build_latest_products_rows(source_name)
-        price_changes_rows = self._build_price_changes_rows(source_name, recent_limit=recent_limit)
-        run_summary_rows = self._build_run_summary_rows(source_name, recent_limit=recent_limit)
+        latest_products_rows = self._select_fields(
+            self._load_processed_dataset(source_name, "latest_products_processed"),
+            LATEST_PRODUCTS_EXPORT_FIELDS,
+        )
+        price_changes_rows = self._select_fields(
+            self._load_processed_dataset(source_name, "price_changes_processed")[:recent_limit],
+            PRICE_CHANGES_EXPORT_FIELDS,
+        )
+        run_summary_rows = self._select_fields(
+            self._load_processed_dataset(source_name, "run_summary_processed")[:recent_limit],
+            RUN_SUMMARY_EXPORT_FIELDS,
+        )
 
         artifacts = [
             self._write_dataset(
                 export_dir=export_dir,
                 file_stem="latest_products",
-                fieldnames=LATEST_PRODUCTS_FIELDS,
+                fieldnames=LATEST_PRODUCTS_EXPORT_FIELDS,
                 rows=latest_products_rows,
             ),
             self._write_dataset(
                 export_dir=export_dir,
                 file_stem="price_changes",
-                fieldnames=PRICE_CHANGES_FIELDS,
+                fieldnames=PRICE_CHANGES_EXPORT_FIELDS,
                 rows=price_changes_rows,
             ),
             self._write_dataset(
                 export_dir=export_dir,
                 file_stem="run_summary",
-                fieldnames=RUN_SUMMARY_FIELDS,
+                fieldnames=RUN_SUMMARY_EXPORT_FIELDS,
                 rows=run_summary_rows,
             ),
         ]
@@ -135,83 +133,31 @@ class ExportService:
             artifacts=artifacts,
         )
 
-    def _build_latest_products_rows(self, source_name: str) -> list[dict[str, Any]]:
-        """Export the latest known snapshot for each product in a source."""
+    def _load_processed_dataset(self, source_name: str, file_stem: str) -> list[dict[str, Any]]:
+        """Read one processed dataset from disk and fail with a clear message if it is missing."""
 
-        snapshots = self.snapshot_repo.list_current_catalog_for_source(source_name)
-        rows: list[dict[str, Any]] = []
-
-        for snapshot in snapshots:
-            payload = snapshot.payload if isinstance(snapshot.payload, dict) else {}
-            effective_price = snapshot.sale_price if snapshot.sale_price is not None else snapshot.listed_price
-
-            rows.append(
-                {
-                    "source_name": snapshot.source_name,
-                    "external_id": snapshot.external_id,
-                    "product_name": snapshot.product_name,
-                    "brand": snapshot.brand,
-                    "category": snapshot.category,
-                    "product_url": snapshot.product_url,
-                    "image_url": payload.get("image_url"),
-                    "currency": snapshot.currency,
-                    "listed_price": snapshot.listed_price,
-                    "sale_price": snapshot.sale_price,
-                    "effective_price": effective_price,
-                    "availability": snapshot.availability,
-                    "scraped_at": snapshot.scraped_at,
-                    "scrape_run_id": snapshot.scrape_run_id,
-                }
+        json_path = self.processed_dir / source_name / f"{file_stem}.json"
+        if not json_path.exists():
+            raise FileNotFoundError(
+                f"Processed dataset not found: {json_path}. "
+                f"Run `pricemonitor process --source {source_name}` or "
+                f"`pricemonitor run --source {source_name}` first."
             )
+
+        rows = json.loads(json_path.read_text(encoding="utf-8"))
+        if not isinstance(rows, list):
+            raise ValueError(f"Expected a list in processed dataset: {json_path}")
 
         return rows
 
-    def _build_price_changes_rows(self, source_name: str, *, recent_limit: int) -> list[dict[str, Any]]:
-        """Export recent price change events in reverse-chronological order."""
+    def _select_fields(
+        self,
+        rows: list[dict[str, Any]],
+        fieldnames: list[str],
+    ) -> list[dict[str, Any]]:
+        """Project processed rows into the smaller client-facing export shape."""
 
-        events = self.change_event_repo.list_latest_for_source(source_name, limit=recent_limit)
-        rows: list[dict[str, Any]] = []
-
-        for event in events:
-            rows.append(
-                {
-                    "source_name": event.source_name,
-                    "external_id": event.external_id,
-                    "product_name": event.product_name,
-                    "currency": event.currency,
-                    "previous_price": event.previous_price,
-                    "current_price": event.current_price,
-                    "absolute_difference": event.absolute_difference,
-                    "percentage_difference": event.percentage_difference,
-                    "changed_at": event.changed_at,
-                    "scrape_run_id": event.scrape_run_id,
-                }
-            )
-
-        return rows
-
-    def _build_run_summary_rows(self, source_name: str, *, recent_limit: int) -> list[dict[str, Any]]:
-        """Export recent run outcomes for operational reporting."""
-
-        runs = self.scrape_run_repo.list_recent(source_name=source_name, limit=recent_limit)
-        rows: list[dict[str, Any]] = []
-
-        for scrape_run in runs:
-            rows.append(
-                {
-                    "scrape_run_id": scrape_run.id,
-                    "source_name": scrape_run.source_name,
-                    "status": scrape_run.status,
-                    "started_at": scrape_run.started_at,
-                    "finished_at": scrape_run.finished_at,
-                    "duration_seconds": self._duration_seconds(scrape_run),
-                    "records_fetched": scrape_run.records_fetched,
-                    "records_inserted": scrape_run.records_inserted,
-                    "error_message": scrape_run.error_message,
-                }
-            )
-
-        return rows
+        return [{field: row.get(field) for field in fieldnames} for row in rows]
 
     def _write_dataset(
         self,
@@ -255,21 +201,10 @@ class ExportService:
             json_path=json_path,
             row_count=len(rows),
         )
-
-    def _duration_seconds(self, scrape_run: ScrapeRun) -> float | None:
-        """Compute run duration only when the run has a finish timestamp."""
-
-        if scrape_run.finished_at is None:
-            return None
-        return round((scrape_run.finished_at - scrape_run.started_at).total_seconds(), 2)
-
+    
     def _serialize_value(self, value: Any, *, for_csv: bool) -> Any:
-        """Convert database-native values into export-safe representations."""
+        """Convert export values into CSV/JSON-safe representations."""
 
         if value is None:
             return "" if for_csv else None
-        if isinstance(value, Decimal):
-            return str(value)
-        if isinstance(value, datetime):
-            return value.isoformat()
         return value

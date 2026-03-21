@@ -1,22 +1,13 @@
 from __future__ import annotations
 
-"""Tests for business-facing CSV/JSON exports and the export CLI flow."""
+"""Tests for business-facing exports that are built from processed datasets."""
 
 import csv
 import json
-from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 
 from pricemonitor.main import main
-from pricemonitor.models.schemas import PriceChangeEventCreate, ProductRecord
 from pricemonitor.services.export import ExportService
-from pricemonitor.storage.database import create_engine_from_url, create_session_factory, create_test_schema
-from pricemonitor.storage.repositories import (
-    PriceChangeEventRepository,
-    ProductSnapshotRepository,
-    ScrapeRunRepository,
-)
 
 
 def write_export_test_config(root: Path) -> Path:
@@ -65,121 +56,108 @@ def write_export_test_config(root: Path) -> Path:
     return configs_dir / "settings.yaml"
 
 
-def seed_export_data(session) -> None:
-    """Insert two successful runs plus one price change so exports have meaningful content."""
+def seed_processed_files(processed_root: Path) -> None:
+    """Write processed JSON inputs that the export layer can turn into client-facing outputs."""
 
-    run_repo = ScrapeRunRepository(session)
-    snapshot_repo = ProductSnapshotRepository(session)
-    change_repo = PriceChangeEventRepository(session)
+    source_dir = processed_root / "site_a"
+    source_dir.mkdir(parents=True, exist_ok=True)
 
-    previous_run = run_repo.create_scrape_run(
-        "site_a",
-        started_at=datetime(2026, 3, 21, 10, 0, tzinfo=timezone.utc),
-    )
-    session.commit()
+    latest_products_rows = [
+        {
+            "source_name": "site_a",
+            "external_id": "SKU-1",
+            "product_name": "Exported Product",
+            "brand": "ExampleBrand",
+            "category": "Accessories",
+            "product_url": "https://example.com/items/sku-1",
+            "image_url": "https://example.com/images/sku-1.jpg",
+            "currency": "USD",
+            "listed_price": "25.00",
+            "sale_price": "24.00",
+            "effective_price": "24.00",
+            "is_discounted": True,
+            "availability": "in_stock",
+            "availability_group": "available",
+            "scraped_at": "2026-03-21T11:01:00+00:00",
+            "scrape_date": "2026-03-21",
+            "scrape_run_id": 2,
+        }
+    ]
+    price_changes_rows = [
+        {
+            "source_name": "site_a",
+            "external_id": "SKU-1",
+            "product_name": "Exported Product",
+            "currency": "USD",
+            "previous_price": "20.00",
+            "current_price": "24.00",
+            "absolute_difference": "4.00",
+            "percentage_difference": "20.00",
+            "change_direction": "increase",
+            "change_bucket": "15%+",
+            "change_magnitude": "major",
+            "is_price_increase": True,
+            "is_price_decrease": False,
+            "changed_at": "2026-03-21T11:02:00+00:00",
+            "changed_date": "2026-03-21",
+            "scrape_run_id": 2,
+        }
+    ]
+    run_summary_rows = [
+        {
+            "scrape_run_id": 2,
+            "source_name": "site_a",
+            "status": "succeeded",
+            "success_flag": True,
+            "started_at": "2026-03-21T11:00:00+00:00",
+            "finished_at": "2026-03-21T11:02:00+00:00",
+            "duration_seconds": 120.0,
+            "records_fetched": 1,
+            "records_inserted": 1,
+            "insert_rate": 1.0,
+            "validity_rate": 1.0,
+            "error_message": None,
+        },
+        {
+            "scrape_run_id": 1,
+            "source_name": "site_a",
+            "status": "succeeded",
+            "success_flag": True,
+            "started_at": "2026-03-21T10:00:00+00:00",
+            "finished_at": "2026-03-21T10:02:00+00:00",
+            "duration_seconds": 120.0,
+            "records_fetched": 1,
+            "records_inserted": 1,
+            "insert_rate": 1.0,
+            "validity_rate": 1.0,
+            "error_message": None,
+        },
+    ]
 
-    snapshot_repo.insert_product_snapshots(
-        scrape_run_id=previous_run.id,
-        source_name="site_a",
-        products=[
-            ProductRecord(
-                external_id="SKU-1",
-                product_name="Exported Product",
-                brand="ExampleBrand",
-                category="Accessories",
-                product_url="https://example.com/items/sku-1",
-                image_url="https://example.com/images/sku-1.jpg",
-                currency="USD",
-                listed_price=Decimal("20.00"),
-                sale_price=None,
-                availability="in_stock",
-            )
-        ],
-        scraped_at=datetime(2026, 3, 21, 10, 1, tzinfo=timezone.utc),
+    (source_dir / "latest_products_processed.json").write_text(
+        json.dumps(latest_products_rows, indent=2),
+        encoding="utf-8",
     )
-    run_repo.complete_scrape_run(
-        previous_run.id,
-        records_fetched=1,
-        records_inserted=1,
-        finished_at=datetime(2026, 3, 21, 10, 2, tzinfo=timezone.utc),
+    (source_dir / "price_changes_processed.json").write_text(
+        json.dumps(price_changes_rows, indent=2),
+        encoding="utf-8",
     )
-    session.commit()
-
-    current_run = run_repo.create_scrape_run(
-        "site_a",
-        started_at=datetime(2026, 3, 21, 11, 0, tzinfo=timezone.utc),
+    (source_dir / "run_summary_processed.json").write_text(
+        json.dumps(run_summary_rows, indent=2),
+        encoding="utf-8",
     )
-    session.commit()
-
-    snapshot_repo.insert_product_snapshots(
-        scrape_run_id=current_run.id,
-        source_name="site_a",
-        products=[
-            ProductRecord(
-                external_id="SKU-1",
-                product_name="Exported Product",
-                brand="ExampleBrand",
-                category="Accessories",
-                product_url="https://example.com/items/sku-1",
-                image_url="https://example.com/images/sku-1.jpg",
-                currency="USD",
-                listed_price=Decimal("25.00"),
-                sale_price=None,
-                availability="in_stock",
-            )
-        ],
-        scraped_at=datetime(2026, 3, 21, 11, 1, tzinfo=timezone.utc),
-    )
-    run_repo.complete_scrape_run(
-        current_run.id,
-        records_fetched=1,
-        records_inserted=1,
-        finished_at=datetime(2026, 3, 21, 11, 2, tzinfo=timezone.utc),
-    )
-    session.commit()
-
-    previous_snapshots = snapshot_repo.list_for_scrape_run(previous_run.id)
-    current_snapshots = snapshot_repo.list_for_scrape_run(current_run.id)
-
-    change_repo.insert_price_change_events(
-        [
-            PriceChangeEventCreate(
-                source_name="site_a",
-                external_id="SKU-1",
-                scrape_run_id=current_run.id,
-                previous_snapshot_id=previous_snapshots[0].id,
-                current_snapshot_id=current_snapshots[0].id,
-                product_name="Exported Product",
-                currency="USD",
-                previous_price=Decimal("20.00"),
-                current_price=Decimal("25.00"),
-                absolute_difference=Decimal("5.00"),
-                percentage_difference=Decimal("25.00"),
-                changed_at=datetime(2026, 3, 21, 11, 2, tzinfo=timezone.utc),
-            )
-        ]
-    )
-    session.commit()
 
 
 def test_export_service_writes_csv_and_json_outputs(tmp_path: Path) -> None:
-    """Service-layer exports should write client-friendly CSV and JSON files."""
+    """The export service should build business-facing files from processed inputs."""
 
-    db_path = tmp_path / "service.db"
-    engine = create_engine_from_url(f"sqlite:///{db_path.as_posix()}")
-    create_test_schema(engine)
-    session_factory = create_session_factory(engine)
+    seed_processed_files(tmp_path / "processed")
 
-    with session_factory() as session:
-        seed_export_data(session)
-
-        export_service = ExportService(
-            exports_dir=tmp_path / "exports",
-            scrape_run_repo=ScrapeRunRepository(session),
-            snapshot_repo=ProductSnapshotRepository(session),
-            change_event_repo=PriceChangeEventRepository(session),
-        )
-        report = export_service.export_source_report("site_a", recent_limit=25)
+    export_service = ExportService(
+        processed_dir=tmp_path / "processed",
+        exports_dir=tmp_path / "exports",
+    )
+    report = export_service.export_source_report("site_a", recent_limit=25)
 
     counts = report.counts()
     assert counts["latest_products"] == 1
@@ -188,37 +166,35 @@ def test_export_service_writes_csv_and_json_outputs(tmp_path: Path) -> None:
 
     latest_products_csv = tmp_path / "exports" / "site_a" / "latest_products.csv"
     price_changes_json = tmp_path / "exports" / "site_a" / "price_changes.json"
-    run_summary_csv = tmp_path / "exports" / "site_a" / "run_summary.csv"
+    run_summary_json = tmp_path / "exports" / "site_a" / "run_summary.json"
 
     assert latest_products_csv.exists()
     assert price_changes_json.exists()
-    assert run_summary_csv.exists()
+    assert run_summary_json.exists()
 
     with latest_products_csv.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
 
     assert len(rows) == 1
     assert rows[0]["external_id"] == "SKU-1"
-    assert rows[0]["effective_price"] == "25.00"
+    assert rows[0]["effective_price"] == "24.00"
+    assert rows[0]["availability_group"] == "available"
 
     change_rows = json.loads(price_changes_json.read_text(encoding="utf-8"))
     assert len(change_rows) == 1
-    assert change_rows[0]["absolute_difference"] == "5.00"
-    assert change_rows[0]["percentage_difference"] == "25.00"
+    assert change_rows[0]["change_direction"] == "increase"
+    assert change_rows[0]["change_bucket"] == "15%+"
+
+    run_rows = json.loads(run_summary_json.read_text(encoding="utf-8"))
+    assert len(run_rows) == 2
+    assert run_rows[0]["success_flag"] is True
 
 
 def test_export_cli_generates_business_outputs(tmp_path: Path, capsys) -> None:
-    """The CLI should generate the expected export files from already-stored data."""
+    """The CLI should generate export files from the processed layer."""
 
     config_path = write_export_test_config(tmp_path)
-    db_path = tmp_path / "exports.db"
-
-    engine = create_engine_from_url(f"sqlite:///{db_path.as_posix()}")
-    create_test_schema(engine)
-    session_factory = create_session_factory(engine)
-
-    with session_factory() as session:
-        seed_export_data(session)
+    seed_processed_files(tmp_path / "data" / "processed")
 
     assert main(["--config", str(config_path), "export", "--source", "site_a", "--limit", "10"]) == 0
     output = capsys.readouterr().out

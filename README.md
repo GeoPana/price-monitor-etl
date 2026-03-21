@@ -2,15 +2,14 @@
 
 `price-monitor-etl` is a Python ETL starter project for monitoring e-commerce product prices over time.
 
-The first ten sprints deliver a working local foundation, two real scrapers, a normalization and validation layer, cleaner persistence orchestration, browser automation support, price-change detection, Alembic-based schema migrations, business-facing exports, and pipeline-style orchestration:
+The first eleven sprints now deliver a working local foundation, two real scrapers, a normalization and validation layer, browser automation support, change detection, Alembic-based schema migrations, a processed data layer, business-facing exports, and pipeline-style orchestration.
 
-- configurable settings via YAML and environment variables
-- a CLI for database setup, config inspection, and scraping
-- PostgreSQL persistence for scrape runs and product snapshots
-- Docker Compose for local database setup
-- smoke tests using SQLite
+The project now has a clear three-layer data flow:
 
-The current implementation is still intentionally narrow. It now proves the project shape and data flow with both static and browser-rendered source integrations, a shared cleanup and validation pipeline, repository-based persistence helpers, run-to-run price-change detection, an Alembic migration workflow, client-friendly CSV/JSON reporting outputs, and a clean end-to-end pipeline runner, while leaving processed transforms and richer orchestration for future sprints.
+- `data/raw/` for audit and debugging artifacts
+- PostgreSQL for operational source-of-truth records
+- `data/processed/` for curated analytics-ready datasets
+- `data/exports/` for client-facing CSV and JSON outputs
 
 ## Highlights
 
@@ -34,6 +33,9 @@ Implemented:
 - `pricemonitor scrape --source site_a`
 - `pricemonitor scrape --source site_b`
 - `pricemonitor scrape --source all`
+- `pricemonitor process --source <name>`
+- `pricemonitor export --source <name>`
+- `pricemonitor run --source <name>`
 - real static-site scraper for `site_a` using Books to Scrape
 - browser-rendered scraper support using Playwright
 - browser fetcher and HTTP fetcher selected per source configuration
@@ -50,19 +52,21 @@ Implemented:
 - Alembic migration environment wired to the app's config and SQLAlchemy metadata
 - a committed baseline revision for the current schema
 - `pricemonitor init-db` applying Alembic migrations instead of relying on `create_all()`
-- `pricemonitor export --source <name>` for business-facing CSV and JSON outputs
-- `pricemonitor run --source <name>` for end-to-end scrape + export execution
+- processed latest product, price change, and run summary datasets under `data/processed/`
+- processed enrichment fields such as `effective_price`, `is_discounted`, `availability_group`, `change_direction`, `change_bucket`, `change_magnitude`, `duration_seconds`, `insert_rate`, and `validity_rate`
+- business-facing CSV and JSON exports under `data/exports/`
+- exports now built from the processed data layer rather than directly from the database
 - dedicated pipeline modules under `src/pricemonitor/pipelines/`
-- clearer multi-source orchestration and per-source pipeline lifecycle handling
-- latest catalog, price change, and run summary exports under `data/exports/`
+- clearer multi-source orchestration and per-source lifecycle handling
+- end-to-end `run` orchestration that performs scrape, process, then export
 - `scrape_runs`, `product_snapshots`, and `price_change_events` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, exports, pipeline orchestration, and config output
+- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, processed datasets, exports, pipeline orchestration, and config output
 
 Not implemented yet:
 
-- writes to `data/processed`
-- scheduling, retries, or orchestration
+- Parquet or Excel outputs
+- scheduling, retries, or background orchestration
 
 ## Quickstart
 
@@ -116,9 +120,9 @@ docker compose up -d db
 pricemonitor init-db
 ```
 
-`pricemonitor init-db` now runs Alembic `upgrade head` against the configured database.
+`pricemonitor init-db` runs Alembic `upgrade head` against the configured database.
 
-If you already have a local database that was created before Alembic was introduced and it already matches the current Sprint 7 schema, do not run the baseline migration against those existing tables. Instead, stamp it once:
+If you already have a local database that was created before Alembic was introduced and it already matches the committed baseline schema, do not replay the baseline migration on top of those existing tables. Stamp it once instead:
 
 ```powershell
 make stamp-head
@@ -136,7 +140,19 @@ Or run both enabled sources:
 pricemonitor scrape --source all --limit 2
 ```
 
-### 7. Generate business-facing exports
+### 7. Build processed datasets
+
+```powershell
+pricemonitor process --source site_a
+```
+
+Or process all enabled sources:
+
+```powershell
+pricemonitor process --source all --limit 50
+```
+
+### 8. Generate business-facing exports
 
 ```powershell
 pricemonitor export --source site_a
@@ -148,7 +164,7 @@ Or export all enabled sources:
 pricemonitor export --source all --limit 50
 ```
 
-### 8. Run the full end-to-end pipeline
+### 9. Run the full end-to-end pipeline
 
 ```powershell
 pricemonitor run --source site_a --limit 5 --report-limit 50
@@ -160,7 +176,7 @@ Or run the full pipeline for all enabled sources:
 pricemonitor run --source all --limit 2 --report-limit 25
 ```
 
-### 9. Run tests
+### 10. Run tests
 
 ```powershell
 pytest
@@ -171,9 +187,8 @@ pytest
 ```powershell
 pricemonitor show-config
 pricemonitor init-db
-pricemonitor scrape --source site_a --limit 5
-pricemonitor scrape --source site_b --limit 5
 pricemonitor scrape --source all --limit 2
+pricemonitor process --source all --limit 50
 pricemonitor export --source all --limit 50
 pricemonitor run --source all --limit 2 --report-limit 25
 pytest
@@ -188,6 +203,13 @@ Scrape completed for site_b: fetched=5 valid=5 invalid=0 inserted=5 archived=1 c
 
 On a later run, `changes` becomes non-zero only when a product price differs from the previous successful run for that same source.
 
+Expected process output:
+
+```text
+Process completed for site_a: latest_products=5 price_changes=2 run_summary=6 dir=...\data\processed\site_a
+Process completed for site_b: latest_products=6 price_changes=0 run_summary=4 dir=...\data\processed\site_b
+```
+
 Expected export output:
 
 ```text
@@ -199,6 +221,7 @@ Expected pipeline output:
 
 ```text
 Scrape completed for site_a: fetched=2 valid=2 invalid=0 inserted=2 archived=3 changes=0
+Process completed for site_a: latest_products=2 price_changes=0 run_summary=3 dir=...\data\processed\site_a
 Export completed for site_a: latest_products=2 price_changes=0 run_summary=3 dir=...\data\exports\site_a
 Pipeline run completed for site_a.
 ```
@@ -263,13 +286,31 @@ Run all enabled scrapers:
 pricemonitor scrape --source all --limit 2
 ```
 
+### Build processed datasets for one source
+
+```powershell
+pricemonitor process --source site_a
+```
+
+Limit recent rows included in processed `price_changes` and `run_summary`:
+
+```powershell
+pricemonitor process --source site_a --limit 25
+```
+
+Process all enabled sources:
+
+```powershell
+pricemonitor process --source all --limit 50
+```
+
 ### Export one source
 
 ```powershell
 pricemonitor export --source site_a
 ```
 
-Limit recent rows included in `price_changes` and `run_summary`:
+Limit recent rows included in exported `price_changes` and `run_summary`:
 
 ```powershell
 pricemonitor export --source site_a --limit 25
@@ -301,6 +342,7 @@ make install-dev
 make show-config
 make init-db
 make scrape
+make process
 make export
 make run
 make test
@@ -338,9 +380,34 @@ Existing pre-Alembic databases:
 - if the database was already created before Sprint 8 and already matches the current schema, use `make stamp-head` once
 - after that, use normal Alembic revisions and upgrades
 
+## Processed Data Layer
+
+Sprint 11 adds a real processed layer under `data/processed/<source>/`.
+
+Each process run regenerates:
+
+- `latest_products_processed.csv`
+- `latest_products_processed.json`
+- `price_changes_processed.csv`
+- `price_changes_processed.json`
+- `run_summary_processed.csv`
+- `run_summary_processed.json`
+
+Dataset meaning:
+
+- `latest_products_processed` contains the latest known snapshot per product plus analytics-oriented enrichment fields such as `effective_price`, `is_discounted`, `availability_group`, and `scrape_date`
+- `price_changes_processed` contains recent change events plus enrichment fields such as `change_direction`, `change_bucket`, `change_magnitude`, `is_price_increase`, `is_price_decrease`, and `changed_date`
+- `run_summary_processed` contains recent run outcomes enriched with `success_flag`, `duration_seconds`, `insert_rate`, and `validity_rate`
+
+Important:
+
+- `process` reads from the database only; it does not scrape new data
+- processed files are overwritten on each run so they always reflect the latest stored state
+- `--limit` applies to processed `price_changes` and `run_summary`; `latest_products_processed` always represents the current catalog for that source
+
 ## Exports And Reporting
 
-Sprint 9 adds a reporting pipeline that reads existing database state and writes client-friendly files under `data/exports/<source>/`.
+The export layer now reads curated processed datasets and writes client-friendly files under `data/exports/<source>/`.
 
 Each export run regenerates:
 
@@ -353,40 +420,42 @@ Each export run regenerates:
 
 Dataset meaning:
 
-- `latest_products` contains the latest known snapshot for each product in a source
-- `price_changes` contains recent detected price changes in reverse chronological order
-- `run_summary` contains recent scrape outcomes, counts, durations, and errors
+- `latest_products` is the client-facing projection of the processed latest catalog dataset
+- `price_changes` is the client-facing projection of recent processed price-change rows
+- `run_summary` is the client-facing projection of recent processed run summaries
 
 Important:
 
-- `export` reads from the database only; it does not scrape new data
-- export files are overwritten on each run so they always reflect the latest stored state
-- `--limit` applies to `price_changes` and `run_summary`; `latest_products` always exports the full current catalog for that source
+- `export` no longer scrapes data and no longer reads the database directly
+- `export` expects processed datasets to exist first
+- if processed files are missing, run `pricemonitor process --source <name>` or `pricemonitor run --source <name>` first
+- export files are overwritten on each run so they always reflect the latest processed state
+- `--limit` applies to exported `price_changes` and `run_summary`; `latest_products` always exports the full current processed catalog for that source
 
 ## Pipeline Flow
 
-Sprint 10 adds a clearer orchestration layer under `src/pricemonitor/pipelines/`.
+Sprint 10 introduced the orchestration layer under `src/pricemonitor/pipelines/`, and Sprint 11 extends it with a dedicated process stage.
 
 Pipeline modules:
 
 - `common.py` contains shared helpers such as source resolution and DB error formatting
 - `scrape_run.py` owns the scrape pipeline for one source or many sources
+- `process_run.py` owns the processed-data pipeline for one source or many sources
 - `report_run.py` owns the reporting/export pipeline for one source or many sources
 
-The new `run` command composes both pipeline stages:
+The `run` command now composes all three stages:
 
 1. scrape the source
 2. persist snapshots and change events
-3. export business-facing reports
-
-This makes the project feel like a real pipeline rather than a set of unrelated commands.
+3. build processed datasets
+4. build client-facing exports
 
 Important behavior:
 
 - each source is handled independently inside multi-source orchestration
 - failures are isolated per source during `--source all`
 - a failure in one source does not prevent other enabled sources from being attempted
-- the end-to-end `run` command performs scrape first, then export, for each source in sequence
+- the end-to-end `run` command performs scrape first, then process, then export, for each source in sequence
 
 ## Project Structure
 
@@ -417,15 +486,22 @@ price-monitor-etl/
 |       |-- models/
 |       |-- parsers/
 |       |-- pipelines/
+|       |   |-- common.py
+|       |   |-- process_run.py
+|       |   |-- report_run.py
+|       |   `-- scrape_run.py
 |       |-- scrapers/
 |       |-- services/
-|       |   `-- export.py
+|       |   |-- change_detection.py
+|       |   |-- export.py
+|       |   `-- process.py
 |       `-- storage/
 |-- tests/
 |   |-- test_change_detection.py
 |   |-- test_export.py
 |   |-- test_fetcher_factory.py
 |   |-- test_pipeline.py
+|   |-- test_process.py
 |   |-- test_smoke.py
 |   |-- test_storage_repositories.py
 |   `-- test_validation.py
@@ -510,9 +586,10 @@ Additional unit tests cover normalization helpers and validation rules directly.
 Repository tests cover scrape-run lifecycle helpers, snapshot insertion, raw-page archive output, and price-change event persistence.
 Fetcher tests cover HTTP vs browser fetcher selection.
 Change-detection tests cover changed-price, unchanged-price, and new-product scenarios directly.
-Export tests cover CSV/JSON generation and the export CLI flow directly.
-Pipeline tests cover end-to-end orchestration across multiple sources.
-Alembic becomes the normal migration path, while direct metadata-based schema creation stays limited to isolated test setup.
+Process tests cover processed CSV/JSON generation and the `process` CLI flow directly.
+Export tests cover client-facing CSV/JSON generation from processed inputs and the export CLI flow directly.
+Pipeline tests cover end-to-end orchestration across multiple sources and all three pipeline stages.
+Alembic remains the normal migration path, while direct metadata-based schema creation stays limited to isolated test setup.
 
 ## Source Configuration
 
@@ -549,17 +626,17 @@ Logs are written to:
 logs/pricemonitor.log
 ```
 
-Scrape metadata, snapshots, and detected price changes are persisted in PostgreSQL. `data/raw` is populated after scrapes, `data/exports` is populated after export runs, and `data/processed` is still expected to remain empty for now.
+Scrape metadata, snapshots, and detected price changes are persisted in PostgreSQL.
+`data/raw` is populated after scrapes, `data/processed` is populated after process runs, and `data/exports` is populated after export runs.
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
 The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
-The CLI output and logs now report fetched, valid, invalid, inserted, archived, and detected-change counts for each scrape.
-When you use `--source all`, the pipeline orchestration runs each enabled source in sequence and prints a final summary line after all of them complete.
-The export command writes both CSV and JSON outputs for each source and prints row counts for `latest_products`, `price_changes`, and `run_summary`.
-The `run` command combines scrape and export into a single end-to-end pipeline flow.
-Dynamic sources can switch from the HTTP fetcher to the browser fetcher through source configuration without changing the downstream storage or validation pipeline.
+The CLI output and logs report fetched, valid, invalid, inserted, archived, and detected-change counts for each scrape.
+The process stage writes curated CSV and JSON datasets for latest products, price changes, and run summaries.
+The export stage writes smaller client-facing CSV and JSON datasets derived from the processed layer.
+When you use `--source all`, the orchestration runs each enabled source in sequence and prints a final summary line after all of them complete.
 The first successful run for a source creates the monitoring baseline, so `changes=0` is expected until a later run sees a different price.
 Change detection compares the current run to the previous successful run for the same source and records events in `price_change_events`.
-Schema changes are now tracked through Alembic revisions, and the `alembic_version` table records the currently applied revision.
+Schema changes are tracked through Alembic revisions, and the `alembic_version` table records the currently applied revision.
 
 ## Common Migration Cases
 
@@ -592,6 +669,28 @@ make migrate
 
 Always review autogenerated migrations before committing them.
 
+## Common Process Cases
+
+### Process one source
+
+```powershell
+pricemonitor process --source site_a
+```
+
+### Process all enabled sources
+
+```powershell
+pricemonitor process --source all --limit 50
+```
+
+### Check generated processed files
+
+```text
+data/processed/site_a/latest_products_processed.csv
+data/processed/site_a/price_changes_processed.csv
+data/processed/site_a/run_summary_processed.csv
+```
+
 ## Common Export Cases
 
 ### Export one source
@@ -606,7 +705,19 @@ pricemonitor export --source site_a
 pricemonitor export --source all --limit 50
 ```
 
-### Check generated files
+### If processed files are missing
+
+```powershell
+pricemonitor process --source site_a
+```
+
+or:
+
+```powershell
+pricemonitor run --source site_a
+```
+
+### Check generated export files
 
 ```text
 data/exports/site_a/latest_products.csv
@@ -616,13 +727,13 @@ data/exports/site_a/run_summary.csv
 
 ## Common Pipeline Cases
 
-### Run scrape and export for one source
+### Run scrape, process, and export for one source
 
 ```powershell
 pricemonitor run --source site_a --limit 5 --report-limit 50
 ```
 
-### Run scrape and export for all enabled sources
+### Run scrape, process, and export for all enabled sources
 
 ```powershell
 pricemonitor run --source all --limit 2 --report-limit 25
@@ -651,14 +762,24 @@ docker compose down -v
 docker compose up -d db
 ```
 
+### Missing processed datasets during export
+
+The export layer now depends on files under `data/processed/<source>/`.
+
+Run one of:
+
+```powershell
+pricemonitor process --source site_a
+pricemonitor run --source site_a
+```
+
 ### Local PostgreSQL already uses `5432`
 
 This repository intentionally maps Docker PostgreSQL to `5433`.
 
 ## Next Sprint Candidates
 
-- add processed filesystem outputs
-- add richer report formats such as Parquet or Excel
+- add richer processed or export formats such as Parquet or Excel
 - add retries, scheduling, and background execution
 - add browser-specific wait strategies and richer page interaction helpers
 - expand repository and scraper query helpers further
