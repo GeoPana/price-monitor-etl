@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for monitoring e-commerce product prices over time.
 
-The first twelve sprints now deliver a working local foundation, two real scrapers, a normalization and validation layer, browser automation support, change detection, Alembic-based schema migrations, a processed data layer, business-facing exports, stakeholder-facing alert outputs, and pipeline-style orchestration.
+The first thirteen sprints now deliver a working local foundation, two real scrapers, a normalization and validation layer, browser automation support, change detection, Alembic-based schema migrations, a processed data layer, business-facing exports, stakeholder-facing alert outputs, pipeline-style orchestration, and a read-only FastAPI layer for querying monitoring data over HTTP.
 
 The project now has a clear data flow:
 
@@ -10,6 +10,12 @@ The project now has a clear data flow:
 - PostgreSQL for operational source-of-truth records
 - `data/processed/` for curated analytics-ready datasets
 - `data/exports/` for client-facing exports and alert outputs
+
+And it is now accessible through three interfaces:
+
+- the CLI for running the pipeline
+- generated files under `data/processed/` and `data/exports/`
+- a read-only HTTP API for querying recent runs, products, price changes, and alerts
 
 ## Highlights
 
@@ -21,6 +27,7 @@ The project now has a clear data flow:
 - Requests
 - Beautiful Soup 4
 - Playwright
+- FastAPI
 - Pytest
 - PostgreSQL 16 via Docker Compose
 
@@ -59,18 +66,22 @@ Implemented:
 - exports built from the processed data layer rather than directly from the database
 - stakeholder-facing alert artifacts under `data/exports/<source>/alerts/`
 - alert summaries, top price changes, price drops, major increases, and new-product reports
+- a read-only FastAPI application under `src/pricemonitor/api/`
+- API endpoints for health, sources, recent runs, latest products, price changes, and alert outputs
+- OpenAPI and Swagger UI docs when the API server is running
 - dedicated pipeline modules under `src/pricemonitor/pipelines/`
 - clearer multi-source orchestration and per-source lifecycle handling
 - end-to-end `run` orchestration that performs scrape, process, export, and alert
 - `scrape_runs`, `product_snapshots`, and `price_change_events` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, processed datasets, exports, alerts, pipeline orchestration, and config output
+- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, processed datasets, exports, alerts, pipeline orchestration, API reads, and config output
 
 Not implemented yet:
 
 - external notification delivery such as email or Slack
 - Parquet or Excel outputs
 - scheduling, retries, or background orchestration
+- authenticated or write-capable API endpoints
 
 ## Quickstart
 
@@ -192,7 +203,20 @@ Or run the full pipeline for all enabled sources:
 pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 ```
 
-### 11. Run tests
+### 11. Start the read API
+
+```powershell
+$env:PRICEMONITOR_CONFIG = "configs/settings.yaml"
+uvicorn pricemonitor.api.app:create_app --factory --reload
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### 12. Run tests
 
 ```powershell
 pytest
@@ -209,6 +233,13 @@ pricemonitor export --source all --limit 50
 pricemonitor alert --source all --limit 20 --major-threshold 15
 pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 pytest
+```
+
+To serve the API after generating data:
+
+```powershell
+$env:PRICEMONITOR_CONFIG = "configs/settings.yaml"
+uvicorn pricemonitor.api.app:create_app --factory --reload
 ```
 
 Expected scrape output:
@@ -371,6 +402,43 @@ pricemonitor run --source site_a --limit 5 --report-limit 50 --major-threshold 1
 pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 ```
 
+## Read API
+
+Sprint 13 adds a read-only FastAPI application under `src/pricemonitor/api/`.
+
+Start it from the repository root:
+
+```powershell
+$env:PRICEMONITOR_CONFIG = "configs/settings.yaml"
+uvicorn pricemonitor.api.app:create_app --factory --reload
+```
+
+Then open the interactive docs:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Available endpoints:
+
+- `GET /health`
+- `GET /sources`
+- `GET /runs?source=site_a&limit=20`
+- `GET /products/latest?source=site_a&limit=50`
+- `GET /price-changes?source=site_a&limit=20`
+- `GET /alerts/summary?source=site_a`
+- `GET /alerts/top-price-changes?source=site_a&limit=20`
+- `GET /alerts/new-products?source=site_a&limit=20`
+
+Important behavior:
+
+- `/health` and `/sources` work as soon as the API server starts
+- `/runs` reads recent run history from the database
+- `/products/latest` and `/price-changes` read the generated export files under `data/exports/<source>/`
+- `/alerts/...` reads the generated alert files under `data/exports/<source>/alerts/`
+- endpoints that depend on generated files return `404` with a helpful message if the required export or alert artifact does not exist yet
+- `limit` and `offset` query parameters provide simple pagination on list endpoints
+
 ## Makefile Shortcuts
 
 ```powershell
@@ -501,7 +569,7 @@ Important:
 
 ## Pipeline Flow
 
-Sprint 10 introduced the orchestration layer under `src/pricemonitor/pipelines/`, Sprint 11 added the process stage, and Sprint 12 extends it with a dedicated alert stage.
+Sprint 10 introduced the orchestration layer under `src/pricemonitor/pipelines/`, Sprint 11 added the process stage, Sprint 12 extended it with a dedicated alert stage, and Sprint 13 adds a separate read-only API layer under `src/pricemonitor/api/`.
 
 Pipeline modules:
 
@@ -548,6 +616,18 @@ price-monitor-etl/
 |-- logs/
 |-- src/
 |   `-- pricemonitor/
+|       |-- api/
+|       |   |-- app.py
+|       |   |-- deps.py
+|       |   |-- read_service.py
+|       |   |-- schemas.py
+|       |   `-- routes/
+|       |       |-- alerts.py
+|       |       |-- health.py
+|       |       |-- price_changes.py
+|       |       |-- products.py
+|       |       |-- runs.py
+|       |       `-- sources.py
 |       |-- config.py
 |       |-- logging_config.py
 |       |-- main.py
@@ -569,6 +649,7 @@ price-monitor-etl/
 |       `-- storage/
 |-- tests/
 |   |-- test_alert.py
+|   |-- test_api.py
 |   |-- test_change_detection.py
 |   |-- test_export.py
 |   |-- test_fetcher_factory.py
@@ -662,6 +743,7 @@ Process tests cover processed CSV/JSON generation and the `process` CLI flow dir
 Export tests cover client-facing CSV/JSON generation from processed inputs and the export CLI flow directly.
 Alert tests cover summary generation, focused alert CSV outputs, baseline handling, and the `alert` CLI flow directly.
 Pipeline tests cover end-to-end orchestration across multiple sources and all four pipeline stages.
+API tests cover health, source configuration, recent runs, latest products, price changes, and alert endpoints through FastAPI's test client.
 Alembic remains the normal migration path, while direct metadata-based schema creation stays limited to isolated test setup.
 
 ## Source Configuration
@@ -707,6 +789,8 @@ The CLI output and logs report fetched, valid, invalid, inserted, archived, and 
 The process stage writes curated CSV and JSON datasets for latest products, price changes, and run summaries.
 The export stage writes smaller client-facing CSV and JSON datasets derived from the processed layer.
 The alert stage writes summary JSON/TXT files and focused CSV reports for top changes, drops, increases, and newly seen products.
+The read API exposes the latest monitoring outputs over HTTP without requiring direct file access.
+The API uses the same application configuration as the CLI and can be pointed at a config file through `PRICEMONITOR_CONFIG`.
 When you use `--source all`, the orchestration runs each enabled source in sequence and prints a final summary line after all of them complete.
 The first successful run for a source creates the monitoring baseline, so `changes=0` is expected until a later run sees a different price.
 Alert generation treats the first successful run as baseline mode, so new-products alerts begin only once a second successful run exists for that source.
@@ -838,6 +922,39 @@ pricemonitor run --source site_a --limit 5 --report-limit 50 --major-threshold 1
 pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 ```
 
+## Common API Cases
+
+### Start the local API server
+
+```powershell
+$env:PRICEMONITOR_CONFIG = "configs/settings.yaml"
+uvicorn pricemonitor.api.app:create_app --factory --reload
+```
+
+### Open the interactive docs
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### Check health and configured sources
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/health"
+Invoke-RestMethod "http://127.0.0.1:8000/sources"
+```
+
+### Query run history and latest outputs
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/runs?source=site_a&limit=20"
+Invoke-RestMethod "http://127.0.0.1:8000/products/latest?source=site_a&limit=50"
+Invoke-RestMethod "http://127.0.0.1:8000/price-changes?source=site_a&limit=20"
+Invoke-RestMethod "http://127.0.0.1:8000/alerts/summary?source=site_a"
+Invoke-RestMethod "http://127.0.0.1:8000/alerts/top-price-changes?source=site_a&limit=20"
+Invoke-RestMethod "http://127.0.0.1:8000/alerts/new-products?source=site_a&limit=20"
+```
+
 ## Common Issues
 
 ### PostgreSQL authentication failure
@@ -872,6 +989,25 @@ pricemonitor process --source site_a
 pricemonitor run --source site_a
 ```
 
+### API endpoint returns `404` for products, price changes, or alerts
+
+The read API serves generated outputs. If the required files are missing, the endpoint responds with a helpful `404`.
+
+Run one of:
+
+```powershell
+pricemonitor export --source site_a
+pricemonitor alert --source site_a
+pricemonitor run --source site_a
+```
+
+If the API itself is not reachable, start it first:
+
+```powershell
+$env:PRICEMONITOR_CONFIG = "configs/settings.yaml"
+uvicorn pricemonitor.api.app:create_app --factory --reload
+```
+
 ### Local PostgreSQL already uses `5432`
 
 This repository intentionally maps Docker PostgreSQL to `5433`.
@@ -882,7 +1018,8 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 - add richer processed or export formats such as Parquet or Excel
 - add retries, scheduling, and background execution
 - add browser-specific wait strategies and richer page interaction helpers
-- expose stable read endpoints through an API layer
+- add authenticated or write-capable API endpoints for triggering jobs
+- add a small dashboard or UI on top of the read API
 - improve failure handling and observability
 
 ## License

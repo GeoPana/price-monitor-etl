@@ -34,6 +34,9 @@ alert:
 run:
 	$(APP) --config $(CONFIG) run --source site_a
 	
+api:
+	$(UVICORN) pricemonitor.api.app:create_app --factory --reload
+
 test:
 	pytest
 
