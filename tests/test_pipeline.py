@@ -186,7 +186,7 @@ def stub_fetchers(monkeypatch) -> None:
 
 
 def test_run_pipeline_for_all_sources_smoke(tmp_path: Path, monkeypatch, capsys) -> None:
-    """The `run` command should orchestrate scrape, process, and export for all enabled sources."""
+    """The `run` command should orchestrate scrape, process, export, and alerts for all enabled sources."""
 
     config_path = write_test_config(tmp_path)
     db_path = tmp_path / "pipeline.db"
@@ -216,10 +216,12 @@ def test_run_pipeline_for_all_sources_smoke(tmp_path: Path, monkeypatch, capsys)
     assert "Scrape completed for site_a" in output
     assert "Process completed for site_a: latest_products=1 price_changes=0 run_summary=1" in output
     assert "Export completed for site_a: latest_products=1 price_changes=0 run_summary=1" in output
+    assert "Alert completed for site_a: top_price_changes=0 price_drops=0 major_increases=0 new_products=0" in output
 
     assert "Scrape completed for site_b" in output
     assert "Process completed for site_b: latest_products=1 price_changes=0 run_summary=1" in output
     assert "Export completed for site_b: latest_products=1 price_changes=0 run_summary=1" in output
+    assert "Alert completed for site_b: top_price_changes=0 price_drops=0 major_increases=0 new_products=0" in output
 
     assert "All enabled pipeline runs completed successfully: site_a, site_b" in output
 
@@ -237,6 +239,8 @@ def test_run_pipeline_for_all_sources_smoke(tmp_path: Path, monkeypatch, capsys)
     site_b_processed_dir = tmp_path / "data" / "processed" / "site_b"
     site_a_export_dir = tmp_path / "data" / "exports" / "site_a"
     site_b_export_dir = tmp_path / "data" / "exports" / "site_b"
+    site_a_alerts_dir = site_a_export_dir / "alerts"
+    site_b_alerts_dir = site_b_export_dir / "alerts"
 
     assert (site_a_processed_dir / "latest_products_processed.csv").exists()
     assert (site_a_processed_dir / "price_changes_processed.json").exists()
@@ -254,8 +258,15 @@ def test_run_pipeline_for_all_sources_smoke(tmp_path: Path, monkeypatch, capsys)
     assert (site_b_export_dir / "price_changes.json").exists()
     assert (site_b_export_dir / "run_summary.csv").exists()
 
-    site_a_processed_summary = json.loads(
-        (site_a_processed_dir / "run_summary_processed.json").read_text(encoding="utf-8")
-    )
-    assert len(site_a_processed_summary) == 1
-    assert site_a_processed_summary[0]["source_name"] == "site_a"
+    assert (site_a_alerts_dir / "alerts_summary.json").exists()
+    assert (site_a_alerts_dir / "top_price_changes.csv").exists()
+    assert (site_a_alerts_dir / "new_products.csv").exists()
+
+    assert (site_b_alerts_dir / "alerts_summary.json").exists()
+    assert (site_b_alerts_dir / "top_price_changes.csv").exists()
+    assert (site_b_alerts_dir / "new_products.csv").exists()
+
+    site_a_alert_summary = json.loads((site_a_alerts_dir / "alerts_summary.json").read_text(encoding="utf-8"))
+    assert site_a_alert_summary["source_name"] == "site_a"
+    assert site_a_alert_summary["baseline_mode"] is True
+    assert site_a_alert_summary["top_price_changes_count"] == 0

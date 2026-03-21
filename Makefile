@@ -5,7 +5,7 @@ ALEMBIC ?= alembic
 CONFIG ?= configs/settings.yaml
 message ?= describe_schema_change
 
-.PHONY: install install-dev init-db show-config scrape process export run test migrate revision downgrade history stamp-head
+.PHONY: install install-dev init-db show-config scrape process export alert run test migrate revision downgrade history stamp-head
 
 install:
 	$(PIP) install -e .
@@ -28,6 +28,9 @@ process:
 export:
 	$(APP) --config $(CONFIG) export --source site_a
 
+alert:
+	$(APP) --config $(CONFIG) alert --source site_a
+	
 run:
 	$(APP) --config $(CONFIG) run --source site_a
 	

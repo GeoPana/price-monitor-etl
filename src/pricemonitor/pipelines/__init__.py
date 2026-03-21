@@ -1,3 +1,8 @@
+from pricemonitor.pipelines.alert_run import (
+    AlertSourceResult,
+    run_alert_for_source,
+    run_alert_pipeline,
+)
 from pricemonitor.pipelines.process_run import (
     ProcessSourceResult,
     run_process_for_source,
@@ -15,9 +20,12 @@ from pricemonitor.pipelines.scrape_run import (
 )
 
 __all__ = [
+    "AlertSourceResult",
     "ProcessSourceResult",
     "ReportSourceResult",
     "ScrapeSourceResult",
+    "run_alert_for_source",
+    "run_alert_pipeline",
     "run_process_for_source",
     "run_process_pipeline",
     "run_report_for_source",

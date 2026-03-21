@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from pricemonitor.config import load_settings
 from pricemonitor.logging_config import configure_logging
 from pricemonitor.pipelines.common import format_db_operational_error, resolve_target_sources
+from pricemonitor.pipelines.alert_run import run_alert_for_source, run_alert_pipeline
 from pricemonitor.pipelines.process_run import run_process_for_source, run_process_pipeline
 from pricemonitor.pipelines.report_run import run_report_for_source, run_report_pipeline
 from pricemonitor.pipelines.scrape_run import run_scrape_for_source, run_scrape_pipeline
@@ -63,6 +64,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max rows for exported price-change and run summary exports.",
     )
 
+    alert_parser = subparsers.add_parser(
+        "alert",
+        help="Build stakeholder-facing alert reports from processed datasets.",
+    )
+    alert_parser.add_argument("--source", required=True, help="Source name, e.g. site_a, or all")
+    alert_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Max rows for each alert report.",
+    )
+    alert_parser.add_argument(
+        "--major-threshold",
+        type=float,
+        default=15.0,
+        help="Percentage threshold for the major-increases alert report.",
+    )
+
     run_parser = subparsers.add_parser(
         "run",
         help="Run the full end-to-end pipeline: scrape, process, then export.",
@@ -74,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=50,
         help="Max rows for processed and exported price-change/run-summary datasets.",
+    )
+    run_parser.add_argument(
+        "--major-threshold",
+        type=float,
+        default=15.0,
+        help="Percentage threshold for the major-increases alert report.",
     )
 
     return parser
@@ -114,12 +139,18 @@ def handle_export(config_path: str, source_name: str, limit: int) -> int:
 
     return run_report_pipeline(config_path, source_name, limit)
 
+def handle_alert(config_path: str, source_name: str, limit: int, major_threshold: float,) -> int:
+    """Dispatch to the alert pipeline module."""
+
+    return run_alert_pipeline(config_path, source_name, limit, major_threshold)
+
 
 def handle_run(
     config_path: str,
     source_name: str,
     limit: int | None,
     report_limit: int,
+    major_threshold: float,
 ) -> int:
     """Run the end-to-end pipeline for one source or all enabled sources."""
 
@@ -147,6 +178,12 @@ def handle_run(
                 settings=settings,
                 source_name=resolved_source_name,
                 limit=report_limit,
+            )
+            run_alert_for_source(
+                settings=settings,
+                source_name=resolved_source_name,
+                limit=report_limit,
+                major_threshold_pct=major_threshold,
             )
             completed_sources.append(resolved_source_name)
         except Exception:
@@ -195,8 +232,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "export":
         return handle_export(args.config, args.source, args.limit)
 
+    if args.command == "alert":
+        return handle_alert(args.config, args.source, args.limit, args.major_threshold)
+    
     if args.command == "run":
-        return handle_run(args.config, args.source, args.limit, args.report_limit)
+        return handle_run(
+            args.config,
+            args.source,
+            args.limit,
+            args.report_limit,
+            args.major_threshold,
+        )
     
     parser.error(f"Unsupported command: {args.command}")
     return 2

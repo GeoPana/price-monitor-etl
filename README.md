@@ -2,14 +2,14 @@
 
 `price-monitor-etl` is a Python ETL starter project for monitoring e-commerce product prices over time.
 
-The first eleven sprints now deliver a working local foundation, two real scrapers, a normalization and validation layer, browser automation support, change detection, Alembic-based schema migrations, a processed data layer, business-facing exports, and pipeline-style orchestration.
+The first twelve sprints now deliver a working local foundation, two real scrapers, a normalization and validation layer, browser automation support, change detection, Alembic-based schema migrations, a processed data layer, business-facing exports, stakeholder-facing alert outputs, and pipeline-style orchestration.
 
-The project now has a clear three-layer data flow:
+The project now has a clear data flow:
 
 - `data/raw/` for audit and debugging artifacts
 - PostgreSQL for operational source-of-truth records
 - `data/processed/` for curated analytics-ready datasets
-- `data/exports/` for client-facing CSV and JSON outputs
+- `data/exports/` for client-facing exports and alert outputs
 
 ## Highlights
 
@@ -35,6 +35,7 @@ Implemented:
 - `pricemonitor scrape --source all`
 - `pricemonitor process --source <name>`
 - `pricemonitor export --source <name>`
+- `pricemonitor alert --source <name>`
 - `pricemonitor run --source <name>`
 - real static-site scraper for `site_a` using Books to Scrape
 - browser-rendered scraper support using Playwright
@@ -55,16 +56,19 @@ Implemented:
 - processed latest product, price change, and run summary datasets under `data/processed/`
 - processed enrichment fields such as `effective_price`, `is_discounted`, `availability_group`, `change_direction`, `change_bucket`, `change_magnitude`, `duration_seconds`, `insert_rate`, and `validity_rate`
 - business-facing CSV and JSON exports under `data/exports/`
-- exports now built from the processed data layer rather than directly from the database
+- exports built from the processed data layer rather than directly from the database
+- stakeholder-facing alert artifacts under `data/exports/<source>/alerts/`
+- alert summaries, top price changes, price drops, major increases, and new-product reports
 - dedicated pipeline modules under `src/pricemonitor/pipelines/`
 - clearer multi-source orchestration and per-source lifecycle handling
-- end-to-end `run` orchestration that performs scrape, process, then export
+- end-to-end `run` orchestration that performs scrape, process, export, and alert
 - `scrape_runs`, `product_snapshots`, and `price_change_events` tables
 - local logging to `logs/pricemonitor.log`
-- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, processed datasets, exports, pipeline orchestration, and config output
+- smoke tests and unit tests covering scrape, normalization, validation, fetcher selection, repository behavior, change detection, processed datasets, exports, alerts, pipeline orchestration, and config output
 
 Not implemented yet:
 
+- external notification delivery such as email or Slack
 - Parquet or Excel outputs
 - scheduling, retries, or background orchestration
 
@@ -164,19 +168,31 @@ Or export all enabled sources:
 pricemonitor export --source all --limit 50
 ```
 
-### 9. Run the full end-to-end pipeline
+### 9. Generate alert outputs
 
 ```powershell
-pricemonitor run --source site_a --limit 5 --report-limit 50
+pricemonitor alert --source site_a --limit 20 --major-threshold 15
+```
+
+Or alert all enabled sources:
+
+```powershell
+pricemonitor alert --source all --limit 20 --major-threshold 15
+```
+
+### 10. Run the full end-to-end pipeline
+
+```powershell
+pricemonitor run --source site_a --limit 5 --report-limit 50 --major-threshold 15
 ```
 
 Or run the full pipeline for all enabled sources:
 
 ```powershell
-pricemonitor run --source all --limit 2 --report-limit 25
+pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 ```
 
-### 10. Run tests
+### 11. Run tests
 
 ```powershell
 pytest
@@ -190,7 +206,8 @@ pricemonitor init-db
 pricemonitor scrape --source all --limit 2
 pricemonitor process --source all --limit 50
 pricemonitor export --source all --limit 50
-pricemonitor run --source all --limit 2 --report-limit 25
+pricemonitor alert --source all --limit 20 --major-threshold 15
+pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 pytest
 ```
 
@@ -217,12 +234,20 @@ Export completed for site_a: latest_products=5 price_changes=2 run_summary=6 dir
 Export completed for site_b: latest_products=6 price_changes=0 run_summary=4 dir=...\data\exports\site_b
 ```
 
+Expected alert output:
+
+```text
+Alert completed for site_a: top_price_changes=2 price_drops=1 major_increases=1 new_products=1 dir=...\data\exports\site_a\alerts
+Alert completed for site_b: top_price_changes=0 price_drops=0 major_increases=0 new_products=0 dir=...\data\exports\site_b\alerts
+```
+
 Expected pipeline output:
 
 ```text
 Scrape completed for site_a: fetched=2 valid=2 invalid=0 inserted=2 archived=3 changes=0
 Process completed for site_a: latest_products=2 price_changes=0 run_summary=3 dir=...\data\processed\site_a
 Export completed for site_a: latest_products=2 price_changes=0 run_summary=3 dir=...\data\exports\site_a
+Alert completed for site_a: top_price_changes=0 price_drops=0 major_increases=0 new_products=0 dir=...\data\exports\site_a\alerts
 Pipeline run completed for site_a.
 ```
 
@@ -322,16 +347,28 @@ Export all enabled sources:
 pricemonitor export --source all --limit 50
 ```
 
+### Generate alerts for one source
+
+```powershell
+pricemonitor alert --source site_a --limit 20 --major-threshold 15
+```
+
+Generate alerts for all enabled sources:
+
+```powershell
+pricemonitor alert --source all --limit 20 --major-threshold 15
+```
+
 ### Run the full pipeline for one source
 
 ```powershell
-pricemonitor run --source site_a --limit 5 --report-limit 50
+pricemonitor run --source site_a --limit 5 --report-limit 50 --major-threshold 15
 ```
 
 ### Run the full pipeline for all enabled sources
 
 ```powershell
-pricemonitor run --source all --limit 2 --report-limit 25
+pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 ```
 
 ## Makefile Shortcuts
@@ -344,6 +381,7 @@ make init-db
 make scrape
 make process
 make export
+make alert
 make run
 make test
 make migrate
@@ -407,7 +445,7 @@ Important:
 
 ## Exports And Reporting
 
-The export layer now reads curated processed datasets and writes client-friendly files under `data/exports/<source>/`.
+The export layer reads curated processed datasets and writes client-friendly files under `data/exports/<source>/`.
 
 Each export run regenerates:
 
@@ -432,9 +470,38 @@ Important:
 - export files are overwritten on each run so they always reflect the latest processed state
 - `--limit` applies to exported `price_changes` and `run_summary`; `latest_products` always exports the full current processed catalog for that source
 
+## Alerts And Actionable Reporting
+
+Sprint 12 adds a stakeholder-facing alert layer under `data/exports/<source>/alerts/`.
+
+Each alert run regenerates:
+
+- `alerts_summary.json`
+- `alerts_summary.txt`
+- `top_price_changes.csv`
+- `price_drops.csv`
+- `major_increases.csv`
+- `new_products.csv`
+
+Dataset meaning:
+
+- `alerts_summary` contains the latest run ids, baseline mode, threshold settings, and summary counts
+- `top_price_changes` ranks the biggest processed price movements
+- `price_drops` isolates downward price changes
+- `major_increases` isolates upward price changes above the configured threshold
+- `new_products` highlights products present in the latest successful run but not in the previous successful run
+
+Important:
+
+- `alert` reads processed datasets plus run comparison metadata; it does not scrape new data
+- on the first successful run for a source, `baseline_mode` is `true` and the new-products report intentionally stays empty
+- `--limit` caps each alert report independently
+- `--major-threshold` controls which upward movements qualify for the major-increases report
+- alert files are overwritten on each run so they always reflect the latest processed state
+
 ## Pipeline Flow
 
-Sprint 10 introduced the orchestration layer under `src/pricemonitor/pipelines/`, and Sprint 11 extends it with a dedicated process stage.
+Sprint 10 introduced the orchestration layer under `src/pricemonitor/pipelines/`, Sprint 11 added the process stage, and Sprint 12 extends it with a dedicated alert stage.
 
 Pipeline modules:
 
@@ -442,20 +509,22 @@ Pipeline modules:
 - `scrape_run.py` owns the scrape pipeline for one source or many sources
 - `process_run.py` owns the processed-data pipeline for one source or many sources
 - `report_run.py` owns the reporting/export pipeline for one source or many sources
+- `alert_run.py` owns the alert pipeline for one source or many sources
 
-The `run` command now composes all three stages:
+The `run` command now composes all four stages:
 
 1. scrape the source
 2. persist snapshots and change events
 3. build processed datasets
 4. build client-facing exports
+5. build stakeholder-facing alerts
 
 Important behavior:
 
 - each source is handled independently inside multi-source orchestration
 - failures are isolated per source during `--source all`
 - a failure in one source does not prevent other enabled sources from being attempted
-- the end-to-end `run` command performs scrape first, then process, then export, for each source in sequence
+- the end-to-end `run` command performs scrape first, then process, then export, then alert, for each source in sequence
 
 ## Project Structure
 
@@ -486,17 +555,20 @@ price-monitor-etl/
 |       |-- models/
 |       |-- parsers/
 |       |-- pipelines/
+|       |   |-- alert_run.py
 |       |   |-- common.py
 |       |   |-- process_run.py
 |       |   |-- report_run.py
 |       |   `-- scrape_run.py
 |       |-- scrapers/
 |       |-- services/
+|       |   |-- alert.py
 |       |   |-- change_detection.py
 |       |   |-- export.py
 |       |   `-- process.py
 |       `-- storage/
 |-- tests/
+|   |-- test_alert.py
 |   |-- test_change_detection.py
 |   |-- test_export.py
 |   |-- test_fetcher_factory.py
@@ -588,7 +660,8 @@ Fetcher tests cover HTTP vs browser fetcher selection.
 Change-detection tests cover changed-price, unchanged-price, and new-product scenarios directly.
 Process tests cover processed CSV/JSON generation and the `process` CLI flow directly.
 Export tests cover client-facing CSV/JSON generation from processed inputs and the export CLI flow directly.
-Pipeline tests cover end-to-end orchestration across multiple sources and all three pipeline stages.
+Alert tests cover summary generation, focused alert CSV outputs, baseline handling, and the `alert` CLI flow directly.
+Pipeline tests cover end-to-end orchestration across multiple sources and all four pipeline stages.
 Alembic remains the normal migration path, while direct metadata-based schema creation stays limited to isolated test setup.
 
 ## Source Configuration
@@ -627,14 +700,16 @@ logs/pricemonitor.log
 ```
 
 Scrape metadata, snapshots, and detected price changes are persisted in PostgreSQL.
-`data/raw` is populated after scrapes, `data/processed` is populated after process runs, and `data/exports` is populated after export runs.
+`data/raw` is populated after scrapes, `data/processed` is populated after process runs, and `data/exports` is populated after export and alert runs.
 The `product_snapshots.payload` field keeps the full scraped record, including fields such as `image_url` that are not yet modeled as dedicated columns.
 The raw page archive is written under `data/raw/<source>/run_<id>/` with HTML files and a `manifest.json`.
 The CLI output and logs report fetched, valid, invalid, inserted, archived, and detected-change counts for each scrape.
 The process stage writes curated CSV and JSON datasets for latest products, price changes, and run summaries.
 The export stage writes smaller client-facing CSV and JSON datasets derived from the processed layer.
+The alert stage writes summary JSON/TXT files and focused CSV reports for top changes, drops, increases, and newly seen products.
 When you use `--source all`, the orchestration runs each enabled source in sequence and prints a final summary line after all of them complete.
 The first successful run for a source creates the monitoring baseline, so `changes=0` is expected until a later run sees a different price.
+Alert generation treats the first successful run as baseline mode, so new-products alerts begin only once a second successful run exists for that source.
 Change detection compares the current run to the previous successful run for the same source and records events in `price_change_events`.
 Schema changes are tracked through Alembic revisions, and the `alembic_version` table records the currently applied revision.
 
@@ -725,18 +800,42 @@ data/exports/site_a/price_changes.csv
 data/exports/site_a/run_summary.csv
 ```
 
-## Common Pipeline Cases
+## Common Alert Cases
 
-### Run scrape, process, and export for one source
+### Generate alerts for one source
 
 ```powershell
-pricemonitor run --source site_a --limit 5 --report-limit 50
+pricemonitor alert --source site_a --limit 20 --major-threshold 15
 ```
 
-### Run scrape, process, and export for all enabled sources
+### Generate alerts for all enabled sources
 
 ```powershell
-pricemonitor run --source all --limit 2 --report-limit 25
+pricemonitor alert --source all --limit 20 --major-threshold 15
+```
+
+### Check generated alert files
+
+```text
+data/exports/site_a/alerts/alerts_summary.json
+data/exports/site_a/alerts/top_price_changes.csv
+data/exports/site_a/alerts/price_drops.csv
+data/exports/site_a/alerts/major_increases.csv
+data/exports/site_a/alerts/new_products.csv
+```
+
+## Common Pipeline Cases
+
+### Run scrape, process, export, and alert for one source
+
+```powershell
+pricemonitor run --source site_a --limit 5 --report-limit 50 --major-threshold 15
+```
+
+### Run scrape, process, export, and alert for all enabled sources
+
+```powershell
+pricemonitor run --source all --limit 2 --report-limit 25 --major-threshold 15
 ```
 
 ## Common Issues
@@ -762,9 +861,9 @@ docker compose down -v
 docker compose up -d db
 ```
 
-### Missing processed datasets during export
+### Missing processed datasets during export or alerting
 
-The export layer now depends on files under `data/processed/<source>/`.
+The export and alert layers now depend on files under `data/processed/<source>/`.
 
 Run one of:
 
@@ -779,11 +878,11 @@ This repository intentionally maps Docker PostgreSQL to `5433`.
 
 ## Next Sprint Candidates
 
+- add external delivery such as email, Slack, or webhooks for alert summaries
 - add richer processed or export formats such as Parquet or Excel
 - add retries, scheduling, and background execution
 - add browser-specific wait strategies and richer page interaction helpers
-- expand repository and scraper query helpers further
-- add notifications or alerting for detected price changes
+- expose stable read endpoints through an API layer
 - improve failure handling and observability
 
 ## License
