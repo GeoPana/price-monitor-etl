@@ -40,11 +40,13 @@ Thumbs.db
 
 # Project runtime artifacts
 logs/*.log
+airflow/logs/**
 data/raw/**
 data/processed/**
 data/exports/**
 
 # Keep directory structure in git
+!airflow/logs/.gitkeep
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/exports/.gitkeep

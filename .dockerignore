@@ -25,6 +25,7 @@ htmlcov/
 logs/
 data/
 docs/screenshots/
+airflow/logs
 
 # Packaging artifacts should be rebuilt inside the image if needed.
 build/

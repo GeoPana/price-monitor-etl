@@ -1,4 +1,42 @@
 # Local development services for the project.
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  environment:
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: 8f0c3d5a0a174f4d8cc15f6f8dbf1c66a55f09c7b8fd4d66b6f8e9ea9df9f3f84ac538b3733b4df3a43d5de9f7a1c3e2
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-db:5432/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Airflow tasks should use the same app config, but inside Docker they must
+    # reach the project database by service name instead of localhost.
+    PRICEMONITOR_CONFIG: /opt/airflow/project/configs/settings.yaml
+    DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/price_monitor
+    LOG_LEVEL: INFO
+    PYTHONPATH: /opt/airflow/project/src:/opt/airflow/dags
+    PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+  volumes:
+    - ./:/opt/airflow/project
+    - ./dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/config:/opt/airflow/config
+    - ./airflow/plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    db:
+      condition: service_healthy
+    airflow-db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+
 services:
   db:
     # Official Postgres image
@@ -15,7 +53,93 @@ services:
     volumes:
       # Persist database state across container restarts.
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d price_monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  
+  airflow-db:
+    image: postgres:16
+    container_name: price-monitor-airflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: price-monitor-airflow-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  airflow-api-server:
+    <<: *airflow-common
+    container_name: price-monitor-airflow-api-server
+    command: api-server
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: price-monitor-airflow-scheduler
+    command: scheduler
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: price-monitor-airflow-dag-processor
+    command: dag-processor
+    restart: unless-stopped
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: price-monitor-airflow-worker
+    command: celery worker
+    restart: unless-stopped
+
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: price-monitor-airflow-triggerer
+    command: triggerer
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: price-monitor-airflow-init
+    restart: "no"
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -euo pipefail
+        airflow db migrate &&
+        airflow users create \
+          --username airflow \
+          --password airflow \
+          --firstname Air \
+          --lastname Flow \
+          --role Admin \
+          --email airflow@example.com || true
+
 
 volumes:
   # Named volume managed by Docker for Postgres data files.
   postgres_data:
+  airflow_postgres_data:

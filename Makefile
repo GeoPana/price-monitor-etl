@@ -2,10 +2,13 @@ PYTHON ?= python
 PIP ?= pip
 APP ?= pricemonitor
 ALEMBIC ?= alembic
+UVICORN ?= uvicorn
+DOCKER_COMPOSE ?= docker compose
 CONFIG ?= configs/settings.yaml
 message ?= describe_schema_change
+dag_id ?= pricemonitor_daily_pipeline
 
-.PHONY: install install-dev init-db show-config scrape process export alert run test migrate revision downgrade history stamp-head
+.PHONY: install install-dev init-db show-config scrape process export alert run test migrate revision downgrade history stamp-head airflow-init airflow-up airflow-down airflow-ps airflow-logs airflow-dags airflow-unpause airflow-trigger
 
 install:
 	$(PIP) install -e .
@@ -36,6 +39,30 @@ run:
 	
 api:
 	$(UVICORN) pricemonitor.api.app:create_app --factory --reload
+
+airflow-init:
+	$(DOCKER_COMPOSE) up airflow-init
+
+airflow-up:
+	$(DOCKER_COMPOSE) up -d db airflow-db redis airflow-api-server airflow-scheduler airflow-dag-processor airflow-worker airflow-triggerer
+
+airflow-down:
+	$(DOCKER_COMPOSE) down
+
+airflow-ps:
+	$(DOCKER_COMPOSE) ps
+
+airflow-logs:
+	$(DOCKER_COMPOSE) logs -f airflow-api-server airflow-scheduler airflow-worker
+
+airflow-dags:
+	$(DOCKER_COMPOSE) exec airflow-api-server airflow dags list
+
+airflow-unpause:
+	$(DOCKER_COMPOSE) exec airflow-api-server airflow dags unpause $(dag_id)
+
+airflow-trigger:
+	$(DOCKER_COMPOSE) exec airflow-api-server airflow dags trigger $(dag_id)
 
 test:
 	pytest

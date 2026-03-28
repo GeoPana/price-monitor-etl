@@ -2,7 +2,7 @@
 
 `price-monitor-etl` is a Python ETL starter project for monitoring e-commerce product prices over time.
 
-The first thirteen sprints now deliver a working local foundation, two real scrapers, a normalization and validation layer, browser automation support, change detection, Alembic-based schema migrations, a processed data layer, business-facing exports, stakeholder-facing alert outputs, pipeline-style orchestration, and a read-only FastAPI layer for querying monitoring data over HTTP.
+The first fourteen sprints now deliver a working local foundation, two real scrapers, a normalization and validation layer, browser automation support, change detection, Alembic-based schema migrations, a processed data layer, business-facing exports, stakeholder-facing alert outputs, pipeline-style orchestration, a read-only FastAPI layer for querying monitoring data over HTTP, and Airflow-based scheduling on top of the existing pipeline modules.
 
 The project now has a clear data flow:
 
@@ -69,6 +69,9 @@ Implemented:
 - a read-only FastAPI application under `src/pricemonitor/api/`
 - API endpoints for health, sources, recent runs, latest products, price changes, and alert outputs
 - OpenAPI and Swagger UI docs when the API server is running
+- Airflow DAGs under top-level `dags/` that orchestrate the existing pipeline entrypoints
+- a dedicated `airflow_entrypoints.py` module so DAG files stay thin and reusable
+- local Airflow services in `docker-compose.yaml` with PostgreSQL metadata storage
 - dedicated pipeline modules under `src/pricemonitor/pipelines/`
 - clearer multi-source orchestration and per-source lifecycle handling
 - end-to-end `run` orchestration that performs scrape, process, export, and alert
@@ -80,7 +83,6 @@ Not implemented yet:
 
 - external notification delivery such as email or Slack
 - Parquet or Excel outputs
-- scheduling, retries, or background orchestration
 - authenticated or write-capable API endpoints
 
 ## Quickstart
@@ -439,6 +441,66 @@ Important behavior:
 - endpoints that depend on generated files return `404` with a helpful message if the required export or alert artifact does not exist yet
 - `limit` and `offset` query parameters provide simple pagination on list endpoints
 
+## Airflow Orchestration
+
+Sprint 14 adds Apache Airflow as an outer orchestration layer without moving business logic into the DAG files.
+
+Architecture:
+
+- DAG files live under top-level `dags/`
+- DAG tasks call thin wrappers in `src/pricemonitor/pipelines/airflow_entrypoints.py`
+- the entrypoint module reuses the existing scrape, process, export, and alert pipeline functions
+- Airflow runs in Docker Compose with its own PostgreSQL metadata database and Redis broker
+- the project database remains the source of truth for pipeline data
+
+Included DAGs:
+
+- `pricemonitor_daily_pipeline` for the daily end-to-end flow
+- `pricemonitor_source_scrape` for per-source scrape tasks on a more frequent cadence
+- `pricemonitor_reports` for rebuilding processed datasets, exports, and alerts from stored DB state
+
+Local startup:
+
+```powershell
+docker compose up airflow-init
+docker compose up -d db airflow-db redis airflow-api-server airflow-scheduler airflow-dag-processor airflow-worker airflow-triggerer
+docker compose exec airflow-api-server pricemonitor --config /opt/airflow/project/configs/settings.yaml init-db
+```
+
+Airflow UI:
+
+```text
+http://127.0.0.1:8088
+```
+
+Default local login:
+
+- username: `airflow`
+- password: `airflow`
+
+Useful commands:
+
+```powershell
+make airflow-dags
+make airflow-unpause dag_id=pricemonitor_daily_pipeline
+make airflow-trigger dag_id=pricemonitor_daily_pipeline
+make airflow-logs
+make airflow-down
+```
+
+Current schedules:
+
+- `pricemonitor_daily_pipeline`: `0 6 * * *`
+- `pricemonitor_source_scrape`: `15 0,12,18 * * *`
+- `pricemonitor_reports`: `0 9 * * *`
+
+Practical notes:
+
+- Docker maps the Airflow UI to host port `8088`, not `8080`, to avoid common local port conflicts
+- if you reset volumes with `docker compose down --volumes --remove-orphans`, you must re-run both `airflow-init` and `pricemonitor init-db` inside the `airflow-api-server` container
+- for clean manual testing, unpause the DAG, trigger it, and pause it again after the run starts if you want to suppress new scheduled runs
+- the local Airflow stack uses CeleryExecutor with Redis and a separate PostgreSQL metadata database, while the application data still lives in the project `db` service
+
 ## Makefile Shortcuts
 
 ```powershell
@@ -451,6 +513,11 @@ make process
 make export
 make alert
 make run
+make airflow-init
+make airflow-up
+make airflow-dags
+make airflow-trigger dag_id=pricemonitor_daily_pipeline
+make airflow-down
 make test
 make migrate
 make revision message="add new column"
@@ -460,6 +527,18 @@ make stamp-head
 ```
 
 If `make` is not available on your machine, run the underlying commands directly.
+
+For the Airflow lifecycle on Windows, the equivalent commands are:
+
+```powershell
+docker compose up airflow-init
+docker compose up -d db airflow-db redis airflow-api-server airflow-scheduler airflow-dag-processor airflow-worker airflow-triggerer
+docker compose exec airflow-api-server airflow dags list
+docker compose exec airflow-api-server airflow dags unpause pricemonitor_daily_pipeline
+docker compose exec airflow-api-server airflow dags trigger pricemonitor_daily_pipeline
+docker compose logs -f airflow-api-server airflow-scheduler airflow-worker
+docker compose down
+```
 
 ## Database Migrations
 
@@ -1012,11 +1091,39 @@ uvicorn pricemonitor.api.app:create_app --factory --reload
 
 This repository intentionally maps Docker PostgreSQL to `5433`.
 
+### Airflow UI does not open on `127.0.0.1:8080`
+
+This repository intentionally maps the Airflow UI to `127.0.0.1:8088`.
+
+Open:
+
+```text
+http://127.0.0.1:8088
+```
+
+### Airflow starts after a full reset, but DAGs fail against missing app tables
+
+`airflow-init` only initializes Airflow's metadata database. After a full Docker volume reset, initialize the application database too:
+
+```powershell
+docker compose exec airflow-api-server pricemonitor --config /opt/airflow/project/configs/settings.yaml init-db
+```
+
+### Manual Airflow run stays queued
+
+In this local setup, a paused DAG can still accept a manual trigger but leave the run queued. Unpause first, then trigger:
+
+```powershell
+docker compose exec airflow-api-server airflow dags unpause pricemonitor_daily_pipeline
+docker compose exec airflow-api-server airflow dags trigger pricemonitor_daily_pipeline
+```
+
+If you want to avoid extra scheduled runs during testing, pause the DAG again after the manual run has started.
+
 ## Next Sprint Candidates
 
 - add external delivery such as email, Slack, or webhooks for alert summaries
 - add richer processed or export formats such as Parquet or Excel
-- add retries, scheduling, and background execution
 - add browser-specific wait strategies and richer page interaction helpers
 - add authenticated or write-capable API endpoints for triggering jobs
 - add a small dashboard or UI on top of the read API
